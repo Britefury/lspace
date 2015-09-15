@@ -1,4 +1,4 @@
-use layout::lreq::{LNatSize, LFlex, LReq, fast_min, fast_max};
+use layout::lreq::{LNatSize, LFlex, LReq, fast_max};
 
 pub const EPSILON : f64 = 1.0e-6;
 pub const ONE_MINUS_EPSILON : f64 = 1.0 - EPSILON;
@@ -69,7 +69,7 @@ fn alloc_children_linear_flex(n: usize,
         let csz = creq.size().size() - cshrink + cstretch;
         let cref = match creq.size().before_ref_opt() {
             None => None,
-            Some(before_ref) => Some(before_ref + cstretch * before_ref / sz),
+            Some(before_ref) => Some(before_ref + (cstretch - cshrink) * before_ref / sz),
         };
 
         child_allocs[i].alloc_from_region(creq, pos, csz, cref);
@@ -129,14 +129,22 @@ fn alloc_children_linear(n: usize, child_reqs: &[&LReq], child_allocs: &mut [&mu
                   region_stretch: f32, space_between: f64, pad_start: bool) -> f64 {
     match compute_flex_factors(region_size, minimum_size, natural_size, region_stretch) {
         Some((shrink_frac, stretch_frac)) => {
-            alloc_children_linear_flex(n, child_reqs, child_allocs, region_pos, space_between,
+            let start = if pad_start && region_stretch == (0.0 as f32) {
+                let shrink = natural_size - minimum_size;
+                let shrunk_size = natural_size - shrink * shrink_frac;
+                let start_padding = region_size - shrunk_size;
+                region_pos + start_padding
+            } else {
+                region_pos
+            };
+            alloc_children_linear_flex(n, child_reqs, child_allocs, start, space_between,
                                        shrink_frac, stretch_frac)
         },
 
         None => {
             let start = if pad_start {
-                let stretch_space = region_size - natural_size;
-                region_pos + stretch_space
+                let start_padding = region_size - natural_size;
+                region_pos + start_padding
             } else {
                 region_pos
             };
@@ -183,30 +191,40 @@ fn alloc_children_linear_with_ref(n: usize, child_reqs: &Vec<&LReq>,
             // the required reference point aligns with the allocated reference point.
             // Assuming that the region requisition has its reference point
             // aligned with that of the correct child, this should be fine...
-            let before_offset = fast_max(
-                region_before_ref - region_req.size().before_ref(), 0.0);
+            let before_offset = fast_max(region_before_ref - region_req.size().before_ref(), 0.0);
             alloc_children_linear_fixed(n, &child_reqs[..], &mut child_allocs[..],
                                         before_offset + region_pos, space_between);
         },
         &LFlex::Flex{..} => {
             let req_at_ref_n = child_reqs[ref_point_n];
 
-            let ref_n_shrink = req_at_ref_n.flex().shrink();
-            let ref_n_stretch = req_at_ref_n.flex().stretch();
+            let ref_child_shrink = req_at_ref_n.flex().shrink();
+            let ref_child_stretch = req_at_ref_n.flex().stretch();
+            let ref_child_before_ref_frac = req_at_ref_n.size().fractional_ref_point();
+            let ref_child_after_ref_frac = 1.0 - ref_child_before_ref_frac;
 
             // We have to allocate space in two distinct pieces; the piece before the reference
             // point and the piece after
 
             // Before reference point index
-            let (shrink_before_ref, stretch_before_ref, nat_size_before_ref,
+            let (stretch_before_ref, nat_size_before_ref,
                         min_size_before_ref, region_size_before_ref,
                         spill_before_ref) = {
-                let reqs = &child_reqs[..ref_point_n];
+                let (shrink, stretch) = if ref_point_n == 0 {
+                    (ref_child_shrink * ref_child_before_ref_frac,
+                     ref_child_stretch * ref_child_before_ref_frac as f32)
+                } else {
+                    let reqs = &child_reqs[..ref_point_n];
 
-                let shrink = reqs.iter().fold(0.0,
-                        |acc, x| acc + x.flex().shrink()) + ref_n_shrink * 0.5;
-                let stretch = reqs.iter().fold(0.0,
-                        |acc, x| acc + x.flex().stretch()) + ref_n_stretch * 0.5;
+                    let shrink = reqs.iter().fold(0.0,
+                            |acc, x| acc + x.flex().shrink()) +
+                                ref_child_shrink * ref_child_before_ref_frac;
+                    let stretch = reqs.iter().fold(0.0,
+                            |acc, x| acc + x.flex().stretch()) +
+                                ref_child_stretch * ref_child_before_ref_frac as f32;
+
+                    (shrink, stretch)
+                };
 
                 let natural_size = region_req.size().before_ref();
                 let minimum_size = natural_size - shrink;
@@ -215,35 +233,48 @@ fn alloc_children_linear_with_ref(n: usize, child_reqs: &Vec<&LReq>,
                 // required size.
                 let spill = fast_max(minimum_size - avail_size, 0.0);
 
-                (shrink, stretch, natural_size, minimum_size, avail_size, spill)
+                (stretch, natural_size, minimum_size, avail_size, spill)
             };
 
             // After reference point index
-            let (shrink_after_ref, stretch_after_ref, nat_size_after_ref,
+            let (stretch_after_ref, nat_size_after_ref,
                         min_size_after_ref, region_size_after_ref) = {
-                let reqs = &child_reqs[ref_point_n+1..];
+                let (shrink, stretch) = if ref_point_n >= n-1 {
+                    (ref_child_shrink * ref_child_after_ref_frac,
+                     ref_child_stretch * ref_child_after_ref_frac as f32)
+                } else {
+                    let reqs = &child_reqs[ref_point_n+1..];
 
-                let shrink = reqs.iter().fold(0.0,
-                        |acc, x| acc + x.flex().shrink()) + ref_n_shrink * 0.5;
-                let stretch = reqs.iter().fold(0.0,
-                        |acc, x| acc + x.flex().stretch()) + ref_n_stretch * 0.5;
+                    let shrink = reqs.iter().fold(0.0,
+                            |acc, x| acc + x.flex().shrink()) +
+                                ref_child_shrink * ref_child_after_ref_frac;
+                    let stretch = reqs.iter().fold(0.0,
+                            |acc, x| acc + x.flex().stretch()) +
+                                ref_child_stretch * ref_child_after_ref_frac as f32;
+
+                    (shrink, stretch)
+                };
 
                 let natural_size = region_req.size().after_ref();
                 let minimum_size = natural_size - shrink;
                 // take into account any spill over from before the ref point
                 let avail_size = region_size - region_before_ref - spill_before_ref;
 
-                (shrink, stretch, natural_size, minimum_size, avail_size)
+                (stretch, natural_size, minimum_size, avail_size)
             };
 
+            // Start position at `region_pos`
             let mut pos = region_pos;
+
             // Allocate children before ref point
-            pos = alloc_children_linear(n, &child_reqs[..ref_point_n],
-                                        &mut child_allocs[..ref_point_n],
-                                        nat_size_before_ref, min_size_before_ref,
-                                        pos, region_size_before_ref,
-                                        stretch_before_ref,
-                                        space_between, true);
+            if ref_point_n > 0 {
+                pos = alloc_children_linear(ref_point_n, &child_reqs[..ref_point_n],
+                                            &mut child_allocs[..ref_point_n],
+                                            nat_size_before_ref, min_size_before_ref,
+                                            pos, region_size_before_ref,
+                                            stretch_before_ref,
+                                            space_between, true);
+            }
 
             // Allocate child aligned with ref point
             // Before reference point: compute flex factors and apply
@@ -252,8 +283,8 @@ fn alloc_children_linear_with_ref(n: usize, child_reqs: &Vec<&LReq>,
                                        nat_size_before_ref, stretch_before_ref) {
                 Some((shrink_frac, stretch_factor)) => {
                     ref_child_before_ref = ref_child_before_ref -
-                        req_at_ref_n.flex().shrink() * shrink_frac * 0.5 +
-                        req_at_ref_n.flex().stretch() as f64 * stretch_factor * 0.5;
+                        req_at_ref_n.flex().shrink() * shrink_frac * ref_child_before_ref_frac +
+                        req_at_ref_n.flex().stretch() as f64 * stretch_factor * ref_child_before_ref_frac;
                 },
                 None => {},
             };
@@ -264,22 +295,29 @@ fn alloc_children_linear_with_ref(n: usize, child_reqs: &Vec<&LReq>,
                                        nat_size_after_ref, stretch_after_ref) {
                 Some((shrink_frac, stretch_factor)) => {
                     ref_child_after_ref = ref_child_after_ref -
-                        req_at_ref_n.flex().shrink() * shrink_frac * 0.5 +
-                        req_at_ref_n.flex().stretch() as f64 * stretch_factor * 0.5;
+                        req_at_ref_n.flex().shrink() * shrink_frac * ref_child_after_ref_frac +
+                        req_at_ref_n.flex().stretch() as f64 * stretch_factor * ref_child_after_ref_frac;
                 },
                 None => {},
             };
 
             // Get the total size
             let ref_child_sz = ref_child_before_ref + ref_child_after_ref;
+            // If the child aligned with the ref point is the first child, then the position
+            // won't have been incremented by calling `alloc_children_linear`, since it is
+            // not called if `ref_point_n == 0`. Reset the position so that the child 0's
+            // ref point aligns with the region reference point.
+            if ref_point_n == 0 {
+                pos = region_pos + region_before_ref - ref_child_before_ref;
+            }
             // Allocate the child aligned with ref point
             child_allocs[ref_point_n].alloc_from_region(req_at_ref_n,
-                pos, ref_child_after_ref, Some(ref_child_before_ref));
+                pos, ref_child_sz, Some(ref_child_before_ref));
             // Advance position
             pos = pos + ref_child_sz + space_between;
 
             // Allocate children after reference point
-            alloc_children_linear(n, &child_reqs[ref_point_n+1..],
+            alloc_children_linear(n - (ref_point_n + 1), &child_reqs[ref_point_n+1..],
                                   &mut child_allocs[ref_point_n+1..],
                                   nat_size_after_ref, min_size_after_ref,
                                   pos, region_size_after_ref,
@@ -368,11 +406,17 @@ impl LAlloc {
                              region_ref: Option<f64>) {
         match child_req.size().before_and_after_ref_opt() {
             // Both the allocation region and the requisition have a reference point
-            Some((req_before, req_after)) => {
+            Some((req_before, _)) => {
                 // If the region's reference point is not aligned with the required
                 // reference point, compute the offset
                 let (ref_offset, alloc_before) = match region_ref {
-                    Some(avail_ref) => (fast_max(avail_ref - req_before, 0.0), avail_ref),
+                    Some(avail_ref) => {
+                        if child_req.flex().stretch() == 0.0 {
+                            (fast_max(avail_ref - req_before, 0.0), avail_ref)
+                        } else {
+                            (0.0, avail_ref)
+                        }
+                    },
                     None => (0.0, req_before),
                 };
 
@@ -451,7 +495,7 @@ impl LAlloc {
                         region_ref: Option<f64>, space_between: f64,
                         ref_point_index: Option<usize>) {
         let n = child_reqs.len();
-        assert_eq!(n, child_allocs.len());
+        debug_assert!(n == child_allocs.len());
 
         // There are a few valid, consistent configurations that are identified and handled
         match (ref_point_index, region_req.size(), region_ref) {
@@ -462,7 +506,7 @@ impl LAlloc {
             },
 
             (Some(ref_point_n), &LNatSize::Ref{..}, Some(region_before_ref)) => {
-                assert!(ref_point_n < n);
+                debug_assert!(ref_point_n < n);
                 // REFERENCE POINT INDEX SPECIFIED
                 // REQUISITION HAS REF POINT
                 // REGION HAS REF POINT
@@ -522,8 +566,18 @@ mod tests {
     use std::mem;
     use self::rand::distributions::{Range, IndependentSample};
     use super::*;
-    use layout::lreq::{LNatSize, LFlex, LReq};
+    use layout::lreq::{LNatSize, LFlex, LReq, fast_max, fast_min};
 
+    const ALMOST_EQ_EPSILON: f64 = 1.0e-6;
+
+    macro_rules! assert_almost_eq {
+        ($x:expr, $y:expr) => (
+            if ($x).abs_sub($y) > ALMOST_EQ_EPSILON {
+                panic!("assert_almost_eq failed: {} !=~ {}", $x, $y);
+            }
+        );
+
+    }
 
     //
     //
@@ -549,6 +603,11 @@ mod tests {
         assert_eq!(c.alloc_size(), 10.0);
         assert_eq!(c.actual_size(), 20.0);
         assert_eq!(c.ref_point(), Some(5.0));
+    }
+
+    #[test]
+    fn test_lalloc_mem() {
+        assert_eq!(mem::size_of::<LAlloc>(), 40);
     }
 
     #[test]
@@ -857,7 +916,7 @@ mod tests {
         // Flexible ref with shrink and stretch, natural size with ref offset
         assert_eq!(_alloc_region_ref(
             &LReq::new_flex_ref(3.0, 7.0, 5.0, 3.14), 0.0, 10.0, 4.0),
-            LAlloc::new_ref(1.0, 9.0, 9.0, 3.0));
+            LAlloc::new_ref(0.0, 10.0, 10.0, 4.0));
 
         // Flexible ref with shrink and stretch, extra space
         assert_eq!(_alloc_region(
@@ -875,5 +934,1041 @@ mod tests {
         assert_eq!(_alloc_region_ref(
             &LReq::new_flex_ref(3.0, 7.0, 5.0, 3.14), 0.0, 20.0, 4.0),
             LAlloc::new_ref(0.0, 20.0, 20.0, 4.0));
+    }
+
+    fn alloc_linear(region_pos: f64, region_size: f64, region_ref: Option<f64>,
+                    child_reqs: &Vec<&LReq>, space_between: f64,
+                    ref_point_index: Option<usize>) -> (LReq, Vec<LAlloc>){
+        // Compute the region requisition
+        let region_req = LReq::linear_acc(child_reqs, space_between, ref_point_index);
+
+        // Create allocs for the children
+        let mut child_allocs : Vec<LAlloc> = child_reqs.iter().map(|_| LAlloc::new_empty()).collect();
+
+        {
+            let mut child_alloc_refs : Vec<&mut LAlloc> = child_allocs.iter_mut().collect();
+            LAlloc::alloc_linear(child_reqs, &mut child_alloc_refs, &region_req,
+                                 region_pos, region_size, region_ref, space_between,
+                                 ref_point_index);
+        }
+
+        return (region_req, child_allocs);
+    }
+
+    fn stretch_prop(stretch: f64, total_stretch: f64) -> f64 {
+        if total_stretch == 0.0 {
+            return 0.0;
+        } else {
+            return stretch / total_stretch;
+        }
+    }
+
+    fn alloc_linear_ref_test(child_reqs: &Vec<&LReq>, shrink_frac_before: f64,
+                             shrink_frac_after: f64, additional_before: f64,
+                             additional_after: f64) {
+        if shrink_frac_before > 0.0 && additional_before > 0.0 {
+            panic!("For alloc_linear_ref_test to be valid, the space before the ref point must \
+                   either shrink (shrink_frac_before > 0) or stretch (additional_before > 0), \
+                   not both.");
+        }
+        if shrink_frac_after > 0.0 && additional_after > 0.0 {
+            panic!("For alloc_linear_ref_test to be valid, the space before the ref point must \
+                   either shrink (shrink_frac_after > 0) or stretch (additional_after > 0), \
+                   not both.");
+        }
+        let n = child_reqs.len();
+        for region_pos in vec![0.0, 100.0] {
+            for space_between in vec![0.0, 10.0] {
+                for ref_point_index in 0..n {
+                    // Assume that `LReq::linear_acc` is thoroughly tested and working
+                    // correctly.
+                    // Use it to compute the amount of space required by the child elements.
+                    let region_req = LReq::linear_acc(child_reqs, space_between,
+                        Some(ref_point_index));
+                    let region_req_no_space = LReq::linear_acc(child_reqs, 0.0,
+                        Some(ref_point_index));
+
+                    // Compute the fractional position of the reference point
+                    let region_before_frac = region_req_no_space.size().fractional_ref_point();
+                    let region_after_frac = 1.0 - region_before_frac;
+
+                    // Compute the size that we will allocate to the region
+                    let shrink = region_req.flex().shrink();
+                    let shrink_before = shrink_frac_before * shrink * region_before_frac;
+                    let shrink_after = shrink_frac_after * shrink * region_after_frac;
+                    let stretch = region_req.flex().stretch();
+                    // let stretch_before = stretch as f64 * region_before_frac;
+                    // let stretch_after = stretch as f64 * region_after_frac;
+                    let space_before = region_req.size().before_ref() -
+                            shrink_before + additional_before;
+                    let space_after = region_req.size().after_ref() -
+                            shrink_after + additional_after;
+
+                    let offset = if stretch == 0.0 {
+                        region_pos + additional_before
+                    } else {
+                        region_pos
+                    };
+
+                    // Allocate the boxes
+                    let (req, allocs) = alloc_linear(region_pos, space_before + space_after,
+                                                     Some(space_before), child_reqs, space_between,
+                                                     Some(ref_point_index));
+
+                    let valid_shrink_frac_before = fast_min(shrink_frac_before, 1.0);
+                    let valid_shrink_frac_after = fast_min(shrink_frac_after, 1.0);
+
+                    // For the child aligned with the reference point, get the fractional
+                    // reference point, the reference point and the shrink and stretch factors
+                    let refch_frac_before =
+                            child_reqs[ref_point_index].size().fractional_ref_point();
+                    let refch_frac_after = 1.0 - refch_frac_before;
+                    let refch_before = child_reqs[ref_point_index].size().before_ref();
+                    let refch_after = child_reqs[ref_point_index].size().after_ref();
+                    let refch_shrink = child_reqs[ref_point_index].flex().shrink();
+                    let refch_stretch = child_reqs[ref_point_index].flex().stretch();
+
+                    // Compute the allocation of shrink and stretch before and after the ref point
+                    let mut shrink_before_ref = 0.0;
+                    let mut shrink_after_ref = 0.0;
+                    let mut stretch_before_ref = 0.0;
+                    let mut stretch_after_ref = 0.0;
+                    for i in 0..n {
+                        if i < ref_point_index {
+                            shrink_before_ref += child_reqs[i].flex().shrink();
+                            stretch_before_ref += child_reqs[i].flex().stretch() as f64;
+                        } else if i > ref_point_index {
+                            shrink_after_ref += child_reqs[i].flex().shrink();
+                            stretch_after_ref += child_reqs[i].flex().stretch() as f64;
+                        } else {
+                            shrink_before_ref += child_reqs[i].flex().shrink() * refch_frac_before;
+                            stretch_before_ref +=
+                                    child_reqs[i].flex().stretch() as f64 * refch_frac_before;
+                            shrink_after_ref += child_reqs[i].flex().shrink() * refch_frac_after;
+                            stretch_after_ref +=
+                                    child_reqs[i].flex().stretch() as f64 * refch_frac_after;
+                        }
+                    }
+
+                    // Compute the allocation of space to the child aligned with the reference
+                    // point
+                    let refch_alloc_shrink_before =
+                            refch_shrink * refch_frac_before * valid_shrink_frac_before;
+                    let refch_alloc_stretch_before = additional_before *
+                        stretch_prop(refch_stretch as f64 * refch_frac_before,
+                                     stretch_before_ref as f64);
+                    let refch_alloc_shrink_after =
+                            refch_shrink * refch_frac_after * valid_shrink_frac_after;
+                    let refch_alloc_stretch_after = additional_after *
+                        stretch_prop(refch_stretch as f64 * refch_frac_after,
+                                     stretch_after_ref as f64);
+
+                    let refch_alloc_before = refch_before - refch_alloc_shrink_before +
+                            refch_alloc_stretch_before;
+                    let refch_alloc_after = refch_after - refch_alloc_shrink_after +
+                            refch_alloc_stretch_after;
+                    let refch_alloc_size = refch_alloc_before + refch_alloc_after;
+
+                    if child_reqs[ref_point_index].size().has_ref_point() {
+                        // Ensure that the child aligned with the reference point has the
+                        // correct reference point
+                        assert_almost_eq!(allocs[ref_point_index].ref_point.unwrap(),
+                                          refch_alloc_before);
+                    }
+                    // Ensure that it has been allocated the correct size
+                    assert_almost_eq!(allocs[ref_point_index].alloc_size, refch_alloc_size);
+                    // Ensure that its actual size is not less than the minimum
+                    assert_almost_eq!(allocs[ref_point_index].actual_size,
+                            fast_max(refch_alloc_size,
+                                child_reqs[ref_point_index].size().size() - refch_shrink));
+
+                    // Work backwards from the ref-point
+                    let mut before_pos = space_before - refch_alloc_before;
+                    // Check its position
+                    assert_almost_eq!(allocs[ref_point_index].pos_in_parent, offset + before_pos);
+                    before_pos = before_pos - space_between;
+                    for i in (0..ref_point_index).rev() {
+                        let ch_ref_frac = child_reqs[i].size().fractional_ref_point();
+                        let ch_shrink = child_reqs[i].flex().shrink() * valid_shrink_frac_before;
+                        let ch_stretch = additional_before *
+                                stretch_prop(child_reqs[i].flex().stretch() as f64,
+                                            stretch_before_ref as f64);
+                        let ch_min_size = child_reqs[i].size().size() -
+                                child_reqs[i].flex().shrink();
+                        let ch_size = child_reqs[i].size().size() - ch_shrink + ch_stretch;
+                        let ch_before_ref = child_reqs[i].size().before_ref() -
+                            ch_shrink * ch_ref_frac + ch_stretch * ch_ref_frac;
+                        before_pos = before_pos - ch_size;
+                        assert_almost_eq!(allocs[i].pos_in_parent, offset + before_pos);
+                        assert_almost_eq!(allocs[i].alloc_size, ch_size);
+                        assert_almost_eq!(allocs[i].actual_size, fast_max(ch_size, ch_min_size));
+                        if child_reqs[i].size().has_ref_point() {
+                            assert_almost_eq!(allocs[i].ref_point.unwrap(), ch_before_ref);
+                        }
+                        before_pos = before_pos - space_between;
+                    }
+                    // Check that we have got back to the start point
+                    assert_almost_eq!(before_pos, offset);
+
+                    // Work forwards from the ref-point
+                    let mut after_pos = space_before + refch_alloc_after + space_between;
+                    for i in (ref_point_index+1..n) {
+                        let ch_ref_frac = child_reqs[i].size().fractional_ref_point();
+                        let ch_shrink = child_reqs[i].flex().shrink() * valid_shrink_frac_after;
+                        let ch_stretch = additional_after *
+                                stretch_prop(child_reqs[i].flex().stretch() as f64,
+                                stretch_after_ref as f64);
+                        let ch_min_size = child_reqs[i].size().size() -
+                                child_reqs[i].flex().shrink();
+                        let ch_size = child_reqs[i].size().size() - ch_shrink + ch_stretch;
+                        let ch_before_ref = child_reqs[i].size().before_ref() -
+                            ch_shrink * ch_ref_frac + ch_stretch * ch_ref_frac;
+                        assert_almost_eq!(allocs[i].pos_in_parent, offset + after_pos);
+                        assert_almost_eq!(allocs[i].alloc_size, ch_size);
+                        assert_almost_eq!(allocs[i].actual_size, fast_max(ch_size, ch_min_size));
+                        if child_reqs[i].size().has_ref_point() {
+                            assert_almost_eq!(allocs[i].ref_point.unwrap(), ch_before_ref);
+                        }
+                        after_pos = after_pos + ch_size + space_between;
+                    }
+                }
+            }
+        }
+    }
+
+
+    #[test]
+    fn test_alloc_linear() {
+        let ds0 = LReq::new_fixed_size(10.0);
+        let ds1 = LReq::new_fixed_size(20.0);
+        let ds2 = LReq::new_fixed_size(30.0);
+        let dr0 = LReq::new_fixed_ref(7.5, 2.5);
+        let dr1 = LReq::new_fixed_ref(15.0, 5.0);
+        let dr2 = LReq::new_fixed_ref(22.5, 7.5);
+        let ks0 = LReq::new_flex_size(10.0, 2.0, 0.0);
+        let ks1 = LReq::new_flex_size(20.0, 4.0, 0.0);
+        let ks2 = LReq::new_flex_size(30.0, 6.0, 0.0);
+        let kr0 = LReq::new_flex_ref(7.5, 2.5, 2.0, 0.0);
+        let kr1 = LReq::new_flex_ref(15.0, 5.0, 4.0, 0.0);
+        let kr2 = LReq::new_flex_ref(22.5, 7.5, 6.0, 0.0);
+        let es0 = LReq::new_flex_size(10.0, 0.0, 1.0);
+        let es1 = LReq::new_flex_size(20.0, 0.0, 3.0);
+        let es2 = LReq::new_flex_size(30.0, 0.0, 6.0);
+        let er0 = LReq::new_flex_ref(7.5, 2.5, 0.0, 1.0);
+        let er1 = LReq::new_flex_ref(15.0, 5.0, 0.0, 3.0);
+        let er2 = LReq::new_flex_ref(22.5, 7.5, 0.0, 6.0);
+
+        // FIXED, NO REF
+        // 3 fixed size children, too little space
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, None,
+                &vec![&ds0, &ds1, &ds2], 0.0, None);
+
+            assert_eq!(req, LReq::new_fixed_size(60.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(10.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(30.0, 30.0, 30.0));
+        }
+
+        // 3 fixed size children, natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 60.0, None,
+                &vec![&ds0, &ds1, &ds2], 0.0, None);
+
+            assert_eq!(req, LReq::new_fixed_size(60.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(10.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(30.0, 30.0, 30.0));
+        }
+
+        // 3 fixed size children, additional space
+        {
+            let (req, allocs) = alloc_linear(0.0, 100.0, None,
+                &vec![&ds0, &ds1, &ds2], 0.0, None);
+
+            assert_eq!(req, LReq::new_fixed_size(60.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(10.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(30.0, 30.0, 30.0));
+        }
+
+        // FIXED, WITH REF
+        // 3 fixed ref children, too little space
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, None,
+                &vec![&dr0, &dr1, &dr2], 0.0, None);
+
+            assert_eq!(req, LReq::new_fixed_size(60.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(10.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(30.0, 30.0, 30.0, 22.5));
+        }
+
+        // 3 fixed ref children, natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 60.0, None,
+                &vec![&dr0, &dr1, &dr2], 0.0, None);
+
+            assert_eq!(req, LReq::new_fixed_size(60.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(10.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(30.0, 30.0, 30.0, 22.5));
+        }
+
+        // 3 fixed ref children, additional space
+        {
+            let (req, allocs) = alloc_linear(0.0, 100.0, None,
+                &vec![&dr0, &dr1, &dr2], 0.0, None);
+
+            assert_eq!(req, LReq::new_fixed_size(60.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(10.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(30.0, 30.0, 30.0, 22.5));
+        }
+
+        // SHRINKABLE, NO REF
+        // 3 shrinkable children, less than minimum size
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, None,
+                &vec![&ks0, &ks1, &ks2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 8.0, 8.0));
+            assert_eq!(allocs[1], LAlloc::new(8.0, 16.0, 16.0));
+            assert_eq!(allocs[2], LAlloc::new(24.0, 24.0, 24.0));
+        }
+
+        // 3 shrinkable children, minimum size
+        {
+            let (req, allocs) = alloc_linear(0.0, 48.0, None,
+                &vec![&ks0, &ks1, &ks2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 8.0, 8.0));
+            assert_eq!(allocs[1], LAlloc::new(8.0, 16.0, 16.0));
+            assert_eq!(allocs[2], LAlloc::new(24.0, 24.0, 24.0));
+        }
+
+        // 3 shrinkable children, between minimum and natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 54.0, None,
+                &vec![&ks0, &ks1, &ks2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 9.0, 9.0));
+            assert_eq!(allocs[1], LAlloc::new(9.0, 18.0, 18.0));
+            assert_eq!(allocs[2], LAlloc::new(27.0, 27.0, 27.0));
+        }
+
+        // 3 shrinkable children, natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 60.0, None,
+                &vec![&ks0, &ks1, &ks2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(10.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(30.0, 30.0, 30.0));
+        }
+
+        // 3 shrinkable children, additional space
+        {
+            let (req, allocs) = alloc_linear(0.0, 100.0, None,
+                &vec![&ks0, &ks1, &ks2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(10.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(30.0, 30.0, 30.0));
+        }
+
+        // SHRINKABLE, WITH REF
+        // 3 shrinkable ref children, less than minimum size
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, None,
+                &vec![&kr0, &kr1, &kr2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 8.0, 8.0, 6.0));
+            assert_eq!(allocs[1], LAlloc::new_ref(8.0, 16.0, 16.0, 12.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(24.0, 24.0, 24.0, 18.0));
+        }
+
+        // 3 shrinkable ref children, minimum size
+        {
+            let (req, allocs) = alloc_linear(0.0, 48.0, None,
+                &vec![&kr0, &kr1, &kr2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 8.0, 8.0, 6.0));
+            assert_eq!(allocs[1], LAlloc::new_ref(8.0, 16.0, 16.0, 12.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(24.0, 24.0, 24.0, 18.0));
+        }
+
+        // 3 shrinkable ref children, between minimum and natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 54.0, None,
+                &vec![&kr0, &kr1, &kr2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 9.0, 9.0, 6.75));
+            assert_eq!(allocs[1], LAlloc::new_ref(9.0, 18.0, 18.0, 13.5));
+            assert_eq!(allocs[2], LAlloc::new_ref(27.0, 27.0, 27.0, 20.25));
+        }
+
+        // 3 shrinkable ref children, natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 60.0, None,
+                &vec![&kr0, &kr1, &kr2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(10.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(30.0, 30.0, 30.0, 22.5));
+        }
+
+        // 3 shrinkable ref children, additional space
+        {
+            let (req, allocs) = alloc_linear(0.0, 100.0, None,
+                &vec![&kr0, &kr1, &kr2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(10.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(30.0, 30.0, 30.0, 22.5));
+        }
+
+        // STRETCHABLE, NO REF
+        // 3 stretchable children, too little space
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, None,
+                &vec![&es0, &es1, &es2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 0.0, 10.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(10.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(30.0, 30.0, 30.0));
+        }
+
+        // 3 fixed size children, natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 60.0, None,
+                &vec![&es0, &es1, &es2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 0.0, 10.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(10.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(30.0, 30.0, 30.0));
+        }
+
+        // 3 fixed size children, additional space
+        {
+            let (req, allocs) = alloc_linear(0.0, 100.0, None,
+                &vec![&es0, &es1, &es2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 0.0, 10.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 14.0, 14.0));
+            assert_eq!(allocs[1], LAlloc::new(14.0, 32.0, 32.0));
+            assert_eq!(allocs[2], LAlloc::new(46.0, 54.0, 54.0));
+        }
+
+        // STRETCHABLE, WITH REF
+        // 3 stretchable children, too little space
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, None,
+                &vec![&er0, &er1, &er2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 0.0, 10.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(10.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(30.0, 30.0, 30.0, 22.5));
+        }
+
+        // 3 fixed size children, natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 60.0, None,
+                &vec![&er0, &er1, &er2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 0.0, 10.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(10.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(30.0, 30.0, 30.0, 22.5));
+        }
+
+        // 3 fixed size children, additional space
+        {
+            let (req, allocs) = alloc_linear(0.0, 100.0, None,
+                &vec![&er0, &er1, &er2], 0.0, None);
+
+            assert_eq!(req, LReq::new_flex_size(60.0, 0.0, 10.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 14.0, 14.0, 10.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(14.0, 32.0, 32.0, 24.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(46.0, 54.0, 54.0, 40.5));
+        }
+    }
+
+    #[test]
+    fn test_alloc_linear_ref() {
+        let ds0 = LReq::new_fixed_size(10.0);
+        let ds1 = LReq::new_fixed_size(20.0);
+        let ds2 = LReq::new_fixed_size(30.0);
+        let dr0 = LReq::new_fixed_ref(7.5, 2.5);
+        let dr1 = LReq::new_fixed_ref(15.0, 5.0);
+        let dr2 = LReq::new_fixed_ref(22.5, 7.5);
+        let ks0 = LReq::new_flex_size(10.0, 2.0, 0.0);
+        let ks1 = LReq::new_flex_size(20.0, 4.0, 0.0);
+        let ks2 = LReq::new_flex_size(30.0, 6.0, 0.0);
+        let kr0 = LReq::new_flex_ref(7.5, 2.5, 2.0, 0.0);
+        let kr1 = LReq::new_flex_ref(15.0, 5.0, 4.0, 0.0);
+        let kr2 = LReq::new_flex_ref(22.5, 7.5, 6.0, 0.0);
+        let es0 = LReq::new_flex_size(10.0, 0.0, 1.0);
+        let es1 = LReq::new_flex_size(20.0, 0.0, 3.0);
+        let es2 = LReq::new_flex_size(30.0, 0.0, 6.0);
+        let er0 = LReq::new_flex_ref(7.5, 2.5, 0.0, 1.0);
+        let er1 = LReq::new_flex_ref(15.0, 5.0, 0.0, 3.0);
+        let er2 = LReq::new_flex_ref(22.5, 7.5, 0.0, 6.0);
+
+        // FIXED, NO REF
+        // 3 fixed size children, too little space
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(15.0),
+                &vec![&ds0, &ds1, &ds2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_fixed_ref(5.0, 55.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(20.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(40.0, 30.0, 30.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(15.0),
+                &vec![&ds0, &ds1, &ds2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_fixed_ref(20.0, 40.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(10.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(30.0, 30.0, 30.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(15.0),
+                &vec![&ds0, &ds1, &ds2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_fixed_ref(45.0, 15.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(10.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(30.0, 30.0, 30.0));
+        }
+
+        // 3 fixed size children, natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 70.0, Some(15.0),
+                &vec![&ds0, &ds1, &ds2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_fixed_ref(5.0, 55.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(20.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(40.0, 30.0, 30.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 60.0, Some(15.0),
+                &vec![&ds0, &ds1, &ds2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_fixed_ref(20.0, 40.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(10.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(30.0, 30.0, 30.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 60.0, Some(15.0),
+                &vec![&ds0, &ds1, &ds2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_fixed_ref(45.0, 15.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(10.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(30.0, 30.0, 30.0));
+        }
+
+        // 3 fixed size children, additional space
+        {
+            let (req, allocs) = alloc_linear(0.0, 1000.0, Some(15.0),
+                &vec![&ds0, &ds1, &ds2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_fixed_ref(5.0, 55.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(20.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(40.0, 30.0, 30.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 1000.0, Some(40.0),
+                &vec![&ds0, &ds1, &ds2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_fixed_ref(20.0, 40.0));
+            assert_eq!(allocs[0], LAlloc::new(20.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(30.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(50.0, 30.0, 30.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 1000.0, Some(85.0),
+                &vec![&ds0, &ds1, &ds2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_fixed_ref(45.0, 15.0));
+            assert_eq!(allocs[0], LAlloc::new(40.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(50.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(70.0, 30.0, 30.0));
+        }
+
+        // FIXED, WITH REF
+        // 3 fixed ref children, too little space
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(15.0),
+                &vec![&dr0, &dr1, &dr2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_fixed_ref(7.5, 52.5));
+            assert_eq!(allocs[0], LAlloc::new_ref(7.5, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(17.5, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(37.5, 30.0, 30.0, 22.5));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(15.0),
+                &vec![&dr0, &dr1, &dr2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_fixed_ref(25.0, 35.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(10.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(30.0, 30.0, 30.0, 22.5));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(15.0),
+                &vec![&dr0, &dr1, &dr2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_fixed_ref(52.5, 7.5));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(10.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(30.0, 30.0, 30.0, 22.5));
+        }
+
+        // 3 fixed ref children, natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 60.0, Some(15.0),
+                &vec![&dr0, &dr1, &dr2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_fixed_ref(7.5, 52.5));
+            assert_eq!(allocs[0], LAlloc::new_ref(7.5, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(17.5, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(37.5, 30.0, 30.0, 22.5));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 60.0, Some(15.0),
+                &vec![&dr0, &dr1, &dr2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_fixed_ref(25.0, 35.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(10.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(30.0, 30.0, 30.0, 22.5));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 60.0, Some(15.0),
+                &vec![&dr0, &dr1, &dr2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_fixed_ref(52.5, 7.5));
+            assert_eq!(allocs[0], LAlloc::new_ref(0.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(10.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(30.0, 30.0, 30.0, 22.5));
+        }
+
+        // 3 fixed ref children, additional space
+        {
+            let (req, allocs) = alloc_linear(0.0, 1000.0, Some(15.0),
+                &vec![&dr0, &dr1, &dr2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_fixed_ref(7.5, 52.5));
+            assert_eq!(allocs[0], LAlloc::new_ref(7.5, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(17.5, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(37.5, 30.0, 30.0, 22.5));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 1000.0, Some(45.0),
+                &vec![&dr0, &dr1, &dr2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_fixed_ref(25.0, 35.0));
+            assert_eq!(allocs[0], LAlloc::new_ref(20.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(30.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(50.0, 30.0, 30.0, 22.5));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 1000.0, Some(82.5),
+                &vec![&dr0, &dr1, &dr2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_fixed_ref(52.5, 7.5));
+            assert_eq!(allocs[0], LAlloc::new_ref(30.0, 10.0, 10.0, 7.5));
+            assert_eq!(allocs[1], LAlloc::new_ref(40.0, 20.0, 20.0, 15.0));
+            assert_eq!(allocs[2], LAlloc::new_ref(60.0, 30.0, 30.0, 22.5));
+        }
+
+        // SHRINKABLE, NO REF
+        // 3 shrinkable children, less than minimum size
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(4.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_flex_ref(5.0, 55.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 8.0, 8.0));
+            assert_eq!(allocs[1], LAlloc::new(8.0, 16.0, 16.0));
+            assert_eq!(allocs[2], LAlloc::new(24.0, 24.0, 24.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(15.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_flex_ref(5.0, 55.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 9.0, 9.0));
+            assert_eq!(allocs[1], LAlloc::new(19.0, 16.0, 16.0));
+            assert_eq!(allocs[2], LAlloc::new(35.0, 24.0, 24.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(16.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_flex_ref(20.0, 40.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 8.0, 8.0));
+            assert_eq!(allocs[1], LAlloc::new(8.0, 16.0, 16.0));
+            assert_eq!(allocs[2], LAlloc::new(24.0, 24.0, 24.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(24.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_flex_ref(20.0, 40.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(4.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(14.0, 18.0, 18.0));
+            assert_eq!(allocs[2], LAlloc::new(32.0, 24.0, 24.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(36.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_flex_ref(45.0, 15.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 8.0, 8.0));
+            assert_eq!(allocs[1], LAlloc::new(8.0, 16.0, 16.0));
+            assert_eq!(allocs[2], LAlloc::new(24.0, 24.0, 24.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 30.0, Some(55.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_flex_ref(45.0, 15.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(20.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(40.0, 27.0, 27.0));
+        }
+
+        // 3 shrinkable children, minimum size
+        {
+            let (req, allocs) = alloc_linear(0.0, 48.0, Some(4.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_flex_ref(5.0, 55.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 8.0, 8.0));
+            assert_eq!(allocs[1], LAlloc::new(8.0, 16.0, 16.0));
+            assert_eq!(allocs[2], LAlloc::new(24.0, 24.0, 24.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 59.0, Some(15.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_flex_ref(5.0, 55.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 9.0, 9.0));
+            assert_eq!(allocs[1], LAlloc::new(19.0, 16.0, 16.0));
+            assert_eq!(allocs[2], LAlloc::new(35.0, 24.0, 24.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 48.0, Some(16.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_flex_ref(20.0, 40.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 8.0, 8.0));
+            assert_eq!(allocs[1], LAlloc::new(8.0, 16.0, 16.0));
+            assert_eq!(allocs[2], LAlloc::new(24.0, 24.0, 24.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 56.0, Some(24.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_flex_ref(20.0, 40.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(4.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(14.0, 18.0, 18.0));
+            assert_eq!(allocs[2], LAlloc::new(32.0, 24.0, 24.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 48.0, Some(36.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_flex_ref(45.0, 15.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 8.0, 8.0));
+            assert_eq!(allocs[1], LAlloc::new(8.0, 16.0, 16.0));
+            assert_eq!(allocs[2], LAlloc::new(24.0, 24.0, 24.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 67.0, Some(55.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_flex_ref(45.0, 15.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(20.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(40.0, 27.0, 27.0));
+        }
+
+        // 3 shrinkable children, between minimum and natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 53.5, Some(4.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_flex_ref(5.0, 55.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 8.5, 8.5));
+            assert_eq!(allocs[1], LAlloc::new(8.5, 18.0, 18.0));
+            assert_eq!(allocs[2], LAlloc::new(26.5, 27.0, 27.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 64.5, Some(15.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_flex_ref(5.0, 55.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 9.5, 9.5));
+            assert_eq!(allocs[1], LAlloc::new(19.5, 18.0, 18.0));
+            assert_eq!(allocs[2], LAlloc::new(37.5, 27.0, 27.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 52.0, Some(16.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_flex_ref(20.0, 40.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 8.0, 8.0));
+            assert_eq!(allocs[1], LAlloc::new(8.0, 17.0, 17.0));
+            assert_eq!(allocs[2], LAlloc::new(25.0, 27.0, 27.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 61.0, Some(25.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_flex_ref(20.0, 40.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(5.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(15.0, 19.0, 19.0));
+            assert_eq!(allocs[2], LAlloc::new(34.0, 27.0, 27.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 49.5, Some(36.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_flex_ref(45.0, 15.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(0.0, 8.0, 8.0));
+            assert_eq!(allocs[1], LAlloc::new(8.0, 16.0, 16.0));
+            assert_eq!(allocs[2], LAlloc::new(24.0, 25.5, 25.5));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 68.5, Some(55.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_flex_ref(45.0, 15.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(20.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(40.0, 28.5, 28.5));
+        }
+
+        // 3 shrinkable children, natural size
+        {
+            let (req, allocs) = alloc_linear(0.0, 70.0, Some(15.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_flex_ref(5.0, 55.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(20.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(40.0, 30.0, 30.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 65.0, Some(25.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_flex_ref(20.0, 40.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(5.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(15.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(35.0, 30.0, 30.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 70.0, Some(55.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_flex_ref(45.0, 15.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(20.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(40.0, 30.0, 30.0));
+        }
+
+        // 3 shrinkable children, additional space
+        {
+            let (req, allocs) = alloc_linear(0.0, 500.0, Some(15.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(0));
+
+            assert_eq!(req, LReq::new_flex_ref(5.0, 55.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(20.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(40.0, 30.0, 30.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 500.0, Some(25.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(1));
+
+            assert_eq!(req, LReq::new_flex_ref(20.0, 40.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(5.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(15.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(35.0, 30.0, 30.0));
+        }
+
+        {
+            let (req, allocs) = alloc_linear(0.0, 500.0, Some(55.0),
+                &vec![&ks0, &ks1, &ks2], 0.0, Some(2));
+
+            assert_eq!(req, LReq::new_flex_ref(45.0, 15.0, 12.0, 0.0));
+            assert_eq!(allocs[0], LAlloc::new(10.0, 10.0, 10.0));
+            assert_eq!(allocs[1], LAlloc::new(20.0, 20.0, 20.0));
+            assert_eq!(allocs[2], LAlloc::new(40.0, 30.0, 30.0));
+        }
+
+        // 3 SHRINKABLE CHILDREN, WITH REFERENCE POINTS
+
+        // too little space
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 1.2, 1.3, 0.0, 0.0);
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 1.3, 1.2, 0.0, 0.0);
+
+        // too little space before ref, minimum space after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 1.3, 1.0, 0.0, 0.0);
+        // minimum space before ref, too little space after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 1.0, 1.3, 0.0, 0.0);
+
+        // 40% shrink before ref, minimum space after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.4, 1.0, 0.0, 0.0);
+        // minimum space before ref, 40% shrink after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 1.0, 0.4, 0.0, 0.0);
+
+        // 40% shrink before ref, 60% shrink after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.4, 0.6, 0.0, 0.0);
+        // 60% shrink before ref, 40% shrink after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.6, 0.4, 0.0, 0.0);
+
+        // preferred size before ref, 60% shrink after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.0, 0.6, 0.0, 0.0);
+        // 60% shrink before ref, preferred size after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.6, 0.0, 0.0, 0.0);
+
+        // 40% shrink before ref, 120 stretch space after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.4, 0.0, 0.0, 120.0);
+        // 120 stretch before ref, 40% shrink after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.0, 0.4, 120.0, 0.0);
+
+        // 240 stretch before ref, 120 stretch space after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.0, 0.0, 240.0, 120.0);
+        // 120 stretch before ref, 240 stretch after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.0, 0.0, 120.0, 240.0);
+
+
+        // 3 STRETCHABLE CHILDREN, NO REFERENCE POINTS
+
+        // too little space
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 1.2, 1.3, 0.0, 0.0);
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 1.3, 1.2, 0.0, 0.0);
+
+        // too little space before ref, minimum space after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 1.3, 1.0, 0.0, 0.0);
+        // minimum space before ref, too little space after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 1.0, 1.3, 0.0, 0.0);
+
+        // 40% shrink before ref, minimum space after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.4, 1.0, 0.0, 0.0);
+        // minimum space before ref, 40% shrink after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 1.0, 0.4, 0.0, 0.0);
+
+        // 40% shrink before ref, 60% shrink after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.4, 0.6, 0.0, 0.0);
+        // 60% shrink before ref, 40% shrink after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.6, 0.4, 0.0, 0.0);
+
+        // preferred size before ref, 60% shrink after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.0, 0.6, 0.0, 0.0);
+        // 60% shrink before ref, preferred size after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.6, 0.0, 0.0, 0.0);
+
+        // 40% shrink before ref, 120 stretch space after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.4, 0.0, 0.0, 120.0);
+        // 120 stretch before ref, 40% shrink after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.0, 0.4, 120.0, 0.0);
+
+        // 240 stretch before ref, 120 stretch space after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.0, 0.0, 240.0, 120.0);
+        // 120 stretch before ref, 240 stretch after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.0, 0.0, 120.0, 240.0);
+
+        // 3 STRETCHABLE CHILDREN, WITH REFERENCE POINTS
+
+        // too little space
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 1.2, 1.3, 0.0, 0.0);
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 1.3, 1.2, 0.0, 0.0);
+
+        // too little space before ref, minimum space after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 1.3, 1.0, 0.0, 0.0);
+        // minimum space before ref, too little space after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 1.0, 1.3, 0.0, 0.0);
+
+        // 40% shrink before ref, minimum space after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 0.4, 1.0, 0.0, 0.0);
+        // minimum space before ref, 40% shrink after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 1.0, 0.4, 0.0, 0.0);
+
+        // 40% shrink before ref, 60% shrink after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 0.4, 0.6, 0.0, 0.0);
+        // 60% shrink before ref, 40% shrink after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 0.6, 0.4, 0.0, 0.0);
+
+        // preferred size before ref, 60% shrink after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 0.0, 0.6, 0.0, 0.0);
+        // 60% shrink before ref, preferred size after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 0.6, 0.0, 0.0, 0.0);
+
+        // 40% shrink before ref, 100 stretch space after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 0.4, 0.0, 0.0, 100.0);
+        // 100 stretch before ref, 40% shrink after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 0.0, 0.4, 100.0, 0.0);
+
+        // 200 stretch before ref, 100 stretch space after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 0.0, 0.0, 200.0, 100.0);
+        // 100 stretch before ref, 200 stretch after
+        alloc_linear_ref_test(&vec![&er0, &er1, &er2], 0.0, 0.0, 100.0, 200.0);
     }
 }
