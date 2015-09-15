@@ -410,7 +410,13 @@ impl LAlloc {
                 // If the region's reference point is not aligned with the required
                 // reference point, compute the offset
                 let (ref_offset, alloc_before) = match region_ref {
-                    Some(avail_ref) => (fast_max(avail_ref - req_before, 0.0), avail_ref),
+                    Some(avail_ref) => {
+                        if child_req.flex().stretch() == 0.0 {
+                            (fast_max(avail_ref - req_before, 0.0), avail_ref)
+                        } else {
+                            (0.0, avail_ref)
+                        }
+                    },
                     None => (0.0, req_before),
                 };
 
@@ -560,7 +566,7 @@ mod tests {
     use std::mem;
     use self::rand::distributions::{Range, IndependentSample};
     use super::*;
-    use layout::lreq::{LNatSize, LFlex, LReq, fast_max};
+    use layout::lreq::{LNatSize, LFlex, LReq, fast_max, fast_min};
 
     const ALMOST_EQ_EPSILON: f64 = 1.0e-6;
 
@@ -910,7 +916,7 @@ mod tests {
         // Flexible ref with shrink and stretch, natural size with ref offset
         assert_eq!(_alloc_region_ref(
             &LReq::new_flex_ref(3.0, 7.0, 5.0, 3.14), 0.0, 10.0, 4.0),
-            LAlloc::new_ref(1.0, 9.0, 9.0, 3.0));
+            LAlloc::new_ref(0.0, 10.0, 10.0, 4.0));
 
         // Flexible ref with shrink and stretch, extra space
         assert_eq!(_alloc_region(
@@ -949,6 +955,14 @@ mod tests {
         return (region_req, child_allocs);
     }
 
+    fn stretch_prop(stretch: f64, total_stretch: f64) -> f64 {
+        if total_stretch == 0.0 {
+            return 0.0;
+        } else {
+            return stretch / total_stretch;
+        }
+    }
+
     fn alloc_linear_ref_test(child_reqs: &Vec<&LReq>, shrink_frac_before: f64,
                              shrink_frac_after: f64, additional_before: f64,
                              additional_after: f64) {
@@ -971,9 +985,11 @@ mod tests {
                     // Use it to compute the amount of space required by the child elements.
                     let region_req = LReq::linear_acc(child_reqs, space_between,
                         Some(ref_point_index));
+                    let region_req_no_space = LReq::linear_acc(child_reqs, 0.0,
+                        Some(ref_point_index));
 
                     // Compute the fractional position of the reference point
-                    let region_before_frac = region_req.size().fractional_ref_point();
+                    let region_before_frac = region_req_no_space.size().fractional_ref_point();
                     let region_after_frac = 1.0 - region_before_frac;
 
                     // Compute the size that we will allocate to the region
@@ -981,17 +997,26 @@ mod tests {
                     let shrink_before = shrink_frac_before * shrink * region_before_frac;
                     let shrink_after = shrink_frac_after * shrink * region_after_frac;
                     let stretch = region_req.flex().stretch();
-                    let stretch_before = stretch as f64 * region_before_frac;
-                    let stretch_after = stretch as f64 * region_after_frac;
+                    // let stretch_before = stretch as f64 * region_before_frac;
+                    // let stretch_after = stretch as f64 * region_after_frac;
                     let space_before = region_req.size().before_ref() -
                             shrink_before + additional_before;
                     let space_after = region_req.size().after_ref() -
                             shrink_after + additional_after;
 
+                    let offset = if stretch == 0.0 {
+                        region_pos + additional_before
+                    } else {
+                        region_pos
+                    };
+
                     // Allocate the boxes
                     let (req, allocs) = alloc_linear(region_pos, space_before + space_after,
                                                      Some(space_before), child_reqs, space_between,
                                                      Some(ref_point_index));
+
+                    let valid_shrink_frac_before = fast_min(shrink_frac_before, 1.0);
+                    let valid_shrink_frac_after = fast_min(shrink_frac_after, 1.0);
 
                     // For the child aligned with the reference point, get the fractional
                     // reference point, the reference point and the shrink and stretch factors
@@ -1008,7 +1033,7 @@ mod tests {
                     let mut shrink_after_ref = 0.0;
                     let mut stretch_before_ref = 0.0;
                     let mut stretch_after_ref = 0.0;
-                    for i in 0..ref_point_index {
+                    for i in 0..n {
                         if i < ref_point_index {
                             shrink_before_ref += child_reqs[i].flex().shrink();
                             stretch_before_ref += child_reqs[i].flex().stretch() as f64;
@@ -1025,26 +1050,18 @@ mod tests {
                         }
                     }
 
-                    let stretch_prop = |x, total| {
-                        if total == 0.0 {
-                            return 0.0;
-                        } else {
-                            return x / total;
-                        }
-                    };
-
                     // Compute the allocation of space to the child aligned with the reference
                     // point
                     let refch_alloc_shrink_before =
-                            refch_shrink * refch_frac_before * shrink_frac_before;
+                            refch_shrink * refch_frac_before * valid_shrink_frac_before;
                     let refch_alloc_stretch_before = additional_before *
                         stretch_prop(refch_stretch as f64 * refch_frac_before,
-                                     stretch_before as f64);
+                                     stretch_before_ref as f64);
                     let refch_alloc_shrink_after =
-                            refch_shrink * refch_frac_after * shrink_frac_after;
+                            refch_shrink * refch_frac_after * valid_shrink_frac_after;
                     let refch_alloc_stretch_after = additional_after *
                         stretch_prop(refch_stretch as f64 * refch_frac_after,
-                                     stretch_after as f64);
+                                     stretch_after_ref as f64);
 
                     let refch_alloc_before = refch_before - refch_alloc_shrink_before +
                             refch_alloc_stretch_before;
@@ -1068,21 +1085,21 @@ mod tests {
                     // Work backwards from the ref-point
                     let mut before_pos = space_before - refch_alloc_before;
                     // Check its position
-                    assert_almost_eq!(allocs[ref_point_index].pos_in_parent, before_pos);
+                    assert_almost_eq!(allocs[ref_point_index].pos_in_parent, offset + before_pos);
                     before_pos = before_pos - space_between;
                     for i in (0..ref_point_index).rev() {
                         let ch_ref_frac = child_reqs[i].size().fractional_ref_point();
-                        let ch_shrink = child_reqs[i].flex().shrink() * shrink_frac_before;
+                        let ch_shrink = child_reqs[i].flex().shrink() * valid_shrink_frac_before;
                         let ch_stretch = additional_before *
                                 stretch_prop(child_reqs[i].flex().stretch() as f64,
-                                            stretch_before as f64);
+                                            stretch_before_ref as f64);
                         let ch_min_size = child_reqs[i].size().size() -
                                 child_reqs[i].flex().shrink();
                         let ch_size = child_reqs[i].size().size() - ch_shrink + ch_stretch;
                         let ch_before_ref = child_reqs[i].size().before_ref() -
                             ch_shrink * ch_ref_frac + ch_stretch * ch_ref_frac;
                         before_pos = before_pos - ch_size;
-                        assert_almost_eq!(allocs[i].pos_in_parent, before_pos);
+                        assert_almost_eq!(allocs[i].pos_in_parent, offset + before_pos);
                         assert_almost_eq!(allocs[i].alloc_size, ch_size);
                         assert_almost_eq!(allocs[i].actual_size, fast_max(ch_size, ch_min_size));
                         if child_reqs[i].size().has_ref_point() {
@@ -1091,22 +1108,22 @@ mod tests {
                         before_pos = before_pos - space_between;
                     }
                     // Check that we have got back to the start point
-                    assert_almost_eq!(before_pos, region_pos);
+                    assert_almost_eq!(before_pos, offset);
 
                     // Work forwards from the ref-point
                     let mut after_pos = space_before + refch_alloc_after + space_between;
                     for i in (ref_point_index+1..n) {
                         let ch_ref_frac = child_reqs[i].size().fractional_ref_point();
-                        let ch_shrink = child_reqs[i].flex().shrink() * shrink_frac_after;
-                        let ch_stretch = additional_before *
+                        let ch_shrink = child_reqs[i].flex().shrink() * valid_shrink_frac_after;
+                        let ch_stretch = additional_after *
                                 stretch_prop(child_reqs[i].flex().stretch() as f64,
-                                stretch_after as f64);
+                                stretch_after_ref as f64);
                         let ch_min_size = child_reqs[i].size().size() -
                                 child_reqs[i].flex().shrink();
                         let ch_size = child_reqs[i].size().size() - ch_shrink + ch_stretch;
                         let ch_before_ref = child_reqs[i].size().before_ref() -
                             ch_shrink * ch_ref_frac + ch_stretch * ch_ref_frac;
-                        assert_almost_eq!(allocs[i].pos_in_parent, after_pos);
+                        assert_almost_eq!(allocs[i].pos_in_parent, offset + after_pos);
                         assert_almost_eq!(allocs[i].alloc_size, ch_size);
                         assert_almost_eq!(allocs[i].actual_size, fast_max(ch_size, ch_min_size));
                         if child_reqs[i].size().has_ref_point() {
@@ -1871,15 +1888,15 @@ mod tests {
         // 60% shrink before ref, preferred size after
         alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.6, 0.0, 0.0, 0.0);
 
-        // 40% shrink before ref, 100 stretch space after
-        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.4, 0.0, 0.0, 100.0);
-        // 100 stretch before ref, 40% shrink after
-        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.0, 0.4, 100.0, 0.0);
+        // 40% shrink before ref, 120 stretch space after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.4, 0.0, 0.0, 120.0);
+        // 120 stretch before ref, 40% shrink after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.0, 0.4, 120.0, 0.0);
 
-        // 200 stretch before ref, 100 stretch space after
-        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.0, 0.0, 200.0, 100.0);
-        // 100 stretch before ref, 200 stretch after
-        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.0, 0.0, 100.0, 200.0);
+        // 240 stretch before ref, 120 stretch space after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.0, 0.0, 240.0, 120.0);
+        // 120 stretch before ref, 240 stretch after
+        alloc_linear_ref_test(&vec![&kr0, &kr1, &kr2], 0.0, 0.0, 120.0, 240.0);
 
 
         // 3 STRETCHABLE CHILDREN, NO REFERENCE POINTS
@@ -1908,15 +1925,15 @@ mod tests {
         // 60% shrink before ref, preferred size after
         alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.6, 0.0, 0.0, 0.0);
 
-        // 40% shrink before ref, 100 stretch space after
-        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.4, 0.0, 0.0, 100.0);
-        // 100 stretch before ref, 40% shrink after
-        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.0, 0.4, 100.0, 0.0);
+        // 40% shrink before ref, 120 stretch space after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.4, 0.0, 0.0, 120.0);
+        // 120 stretch before ref, 40% shrink after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.0, 0.4, 120.0, 0.0);
 
-        // 200 stretch before ref, 100 stretch space after
-        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.0, 0.0, 200.0, 100.0);
-        // 100 stretch before ref, 200 stretch after
-        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.0, 0.0, 100.0, 200.0);
+        // 240 stretch before ref, 120 stretch space after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.0, 0.0, 240.0, 120.0);
+        // 120 stretch before ref, 240 stretch after
+        alloc_linear_ref_test(&vec![&es0, &es1, &es2], 0.0, 0.0, 120.0, 240.0);
 
         // 3 STRETCHABLE CHILDREN, WITH REFERENCE POINTS
 
