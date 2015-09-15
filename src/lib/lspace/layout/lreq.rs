@@ -122,7 +122,7 @@ impl LNatSize {
     pub fn before_ref_opt(&self) -> Option<f64> {
         match self {
             &LNatSize::Empty => None,
-            &LNatSize::Size{size: s} => None,
+            &LNatSize::Size{..} => None,
             &LNatSize::Ref{before: b, ..} => Some(b)
         }
     }
@@ -133,7 +133,7 @@ impl LNatSize {
     pub fn after_ref_opt(&self) -> Option<f64> {
         match self {
             &LNatSize::Empty => None,
-            &LNatSize::Size{size: s} => None,
+            &LNatSize::Size{..} => None,
             &LNatSize::Ref{after: a, ..} => Some(a)
         }
     }
@@ -146,8 +146,16 @@ impl LNatSize {
     pub fn before_and_after_ref_opt(&self) -> Option<(f64, f64)> {
         match self {
             &LNatSize::Empty => None,
-            &LNatSize::Size{size: s} => None,
+            &LNatSize::Size{..} => None,
             &LNatSize::Ref{before: b, after: a} => Some((b, a))
+        }
+    }
+
+    /// Get the fractional position of the reference point
+    pub fn fractional_ref_point(&self) -> f64 {
+        match self {
+            &LNatSize::Ref{before, after} => before / (before + after),
+            _ => 0.5,
         }
     }
 
@@ -304,19 +312,18 @@ impl LNatSize {
     /// If `ref_point_index` is `None`, then a `Size` variant is returned. If it is `Some(index)`,
     /// then a `Ref` variant is returned, with the reference point aligned to that of the item
     /// at index `index`.
-    pub fn linear_acc(boxes: &Vec<&LNatSize>, space_between: f64,
+    pub fn linear_acc<'a, T: Iterator<Item=&'a LNatSize>>(mut boxes: T, space_between: f64,
                       ref_point_index: Option<usize>) -> LNatSize {
-        match boxes.split_first() {
+        match boxes.next() {
             // no children
             None => LNatSize::new_empty(),
             // >= 1 children
-            Some((head, tail)) => match ref_point_index {
+            Some(ref head) => match ref_point_index {
                 // no reference point
-                None => tail.iter().fold(head.as_size(), |acc, x| {acc.add(x, space_between)}),
+                None => boxes.fold(head.as_size(), |acc, x| {acc.add(x, space_between)}),
                 // reference point at index `i`, enumerate children and s
                 Some(i) => {
-                    assert!(i < boxes.len());
-                    tail.iter().enumerate().fold(head.as_ref(),
+                    boxes.enumerate().fold(head.as_ref(),
                         |acc, (j, x)| {acc.add_ref(x, space_between, i==(j+1))})
                 },
             }
@@ -331,7 +338,7 @@ impl LNatSize {
     ///
     /// Notionally - but not functionally - equivalent to repeatedly invoking the `max` method
     /// in a pairwise fashion.
-    pub fn perpendicular_acc(xs: &Vec<&LNatSize>) -> LNatSize {
+    pub fn perpendicular_acc<'a, T: Iterator<Item=&'a LNatSize>>(xs: T) -> LNatSize {
         let mut size = 0.0;
         let mut before = 0.0;
         let mut after = 0.0;
@@ -340,12 +347,12 @@ impl LNatSize {
 
         for x in xs {
             match x {
-                &&LNatSize::Empty => {},
-                &&LNatSize::Size{size: s} => {
+                &LNatSize::Empty => {},
+                &LNatSize::Size{size: s} => {
                     size = fast_max(size, s);
                     empty = false;
                 },
-                &&LNatSize::Ref{before: b, after: a} => {
+                &LNatSize::Ref{before: b, after: a} => {
                     size = fast_max(size, b + a);
                     before = fast_max(before, b);
                     after = fast_max(after, a);
@@ -401,7 +408,7 @@ impl LFlex {
     pub fn shrink(&self) -> f64 {
         match self {
             &LFlex::Fixed => 0.0,
-            &LFlex::Flex{shrink: shrink, ..} => shrink
+            &LFlex::Flex{shrink, ..} => shrink
         }
     }
 
@@ -409,7 +416,7 @@ impl LFlex {
     pub fn stretch(&self) -> f32 {
         match self {
             &LFlex::Fixed => 0.0,
-            &LFlex::Flex{stretch: stretch, ..} => stretch
+            &LFlex::Flex{stretch, ..} => stretch
         }
     }
 
@@ -417,8 +424,8 @@ impl LFlex {
     pub fn scale(&self, scale: f32) -> LFlex {
         match self {
             &LFlex::Fixed => *self,
-            &LFlex::Flex{shrink: i, stretch: e} => LFlex::Flex{shrink: i * scale as f64,
-                                                               stretch: e * scale},
+            &LFlex::Flex{shrink, stretch} => LFlex::Flex{shrink: shrink * scale as f64,
+                                                         stretch: stretch * scale},
         }
     }
 
@@ -451,12 +458,13 @@ impl LFlex {
     }
 
     /// Cumulatively add the effects of two `LFlex` instances
-    pub fn linear_acc(flexes: &Vec<&LFlex>) -> LFlex {
-        match flexes.split_first() {
+    pub fn linear_acc<'a, T: Iterator<Item=&'a LFlex>>(mut flexes: T) -> LFlex {
+        match flexes.next
+        () {
             // no children
             None => LFlex::new_fixed(),
             // >= 1 children
-            Some((head, tail)) => tail.iter().fold(**head, |acc, x| {acc.add(x)}),
+            Some(ref head) => flexes.fold(**head, |acc, x| {acc.add(x)}),
         }
     }
 }
@@ -478,8 +486,8 @@ impl LReq {
     }
 
     /// Construct an `LReq` from a given `LNatSize` and `LFlex`
-    pub fn new(size: &LNatSize, flex: &LFlex) -> LReq {
-        return LReq{size: *size, flex: *flex};
+    pub fn new(size: LNatSize, flex: LFlex) -> LReq {
+        return LReq{size: size, flex: flex};
     }
 
     /// Construct an fixed `LReq` of a given size (no flexibility)
@@ -605,17 +613,18 @@ impl LReq {
         // LNatSize::linear_acc
         // If there is a reference point index, we shouldn't filter, as removing items
         // from the list could cause the index to point to the wrong item
-        let sizes: Vec<&LNatSize> = match ref_point_index {
-            None => reqs.iter().filter(|x| x.size != LNatSize::Empty).map(|x| &x.size).collect(),
-            _ => reqs.iter().map(|x| &x.size).collect()
+        let sz = match ref_point_index {
+            None => LNatSize::linear_acc(
+                reqs.iter().filter(|x| x.size != LNatSize::Empty).map(|x| &x.size),
+                space_between, ref_point_index),
+            _ => LNatSize::linear_acc(
+                reqs.iter().map(|x| &x.size),
+                space_between, ref_point_index)
         };
 
         //
-        let flexes: Vec<&LFlex> = reqs.iter().filter(
-                |x| x.flex != LFlex::Fixed).map(|x| &x.flex).collect();
-
-        let sz = LNatSize::linear_acc(&sizes, space_between, ref_point_index);
-        let fl = LFlex::linear_acc(&flexes);
+        let fl = LFlex::linear_acc(reqs.iter().filter(
+                |x| x.flex != LFlex::Fixed).map(|x| &x.flex));
 
         return LReq{size: sz, flex: fl};
     }
@@ -629,13 +638,33 @@ impl LReq {
     /// See `LNatSize::perpendicular_acc` for more info; this does the same thing but taking
     /// flexibiity into account.
     pub fn perpendicular_acc(reqs: &Vec<&LReq>) -> LReq {
-        let sizes: Vec<&LNatSize> = reqs.iter().filter(
-                |x| x.size != LNatSize::Empty).map(|x| &x.size).collect();
+        // Would prefer to use an iterator based solutions above for the purpose of elegance, but
+        // walking the array in a single loop is faster
+        let mut max_min_size = 0.0;
+        let mut got_min_size = false;
+        let mut max_stretch = 0.0;
+        let mut got_stretch = false;
+        for x in reqs {
+            match x.flex.min_size(&x.size()) {
+                None => {},
+                Some(m) => {
+                    max_min_size = fast_max(max_min_size, m);
+                    got_min_size = true;
+                }
+            }
 
-        let min_size = reqs.iter().fold(None, |acc, x| fast_maxopt(acc, x.flex.min_size(&x.size)));
-        let stretch = reqs.iter().fold(None, |acc, x| fast_maxopt(acc, x.flex.stretch_opt()));
+            match x.flex {
+                LFlex::Fixed => {},
+                LFlex::Flex{stretch: s, ..} => {
+                    max_stretch = fast_max(max_stretch, s);
+                    got_stretch = true;
+                }
+            }
+        }
+        let min_size = if got_min_size {Some(max_min_size)} else {None};
+        let stretch = if got_stretch {Some(max_stretch)} else {None};
 
-        let sz = LNatSize::perpendicular_acc(&sizes);
+        let sz = LNatSize::perpendicular_acc(reqs.iter().map(|x| &x.size));
 
         return LReq{size: sz, flex: LReq::make_flex(sz, min_size, stretch)};
     }
@@ -785,17 +814,24 @@ mod tests {
         let b = LNatSize::new_size(5.0);
         let c = LNatSize::new_size(4.0);
 
-        assert_eq!(LNatSize::linear_acc(&vec![], 0.0, None), LNatSize::new_empty());
-        assert_eq!(LNatSize::linear_acc(&vec![], 100.0, None), LNatSize::new_empty());
+        assert_eq!(LNatSize::linear_acc(vec![].into_iter(), 0.0, None),
+            LNatSize::new_empty());
+        assert_eq!(LNatSize::linear_acc(vec![].into_iter(), 100.0, None),
+            LNatSize::new_empty());
 
-        assert_eq!(LNatSize::linear_acc(&vec![&a], 0.0, None), LNatSize::new_size(1.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a], 100.0, None), LNatSize::new_size(1.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a].into_iter(), 0.0, None),
+            LNatSize::new_size(1.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a].into_iter(), 100.0, None),
+            LNatSize::new_size(1.0));
 
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b], 0.0, None), LNatSize::new_size(6.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b], 100.0, None), LNatSize::new_size(106.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b].into_iter(), 0.0, None),
+            LNatSize::new_size(6.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b].into_iter(), 100.0, None),
+            LNatSize::new_size(106.0));
 
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b, &c], 0.0, None), LNatSize::new_size(10.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b, &c], 100.0, None),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b, &c].into_iter(), 0.0, None),
+            LNatSize::new_size(10.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b, &c].into_iter(), 100.0, None),
             LNatSize::new_size(210.0));
     }
 
@@ -806,49 +842,61 @@ mod tests {
         let c = LNatSize::new_ref(5.0, 10.0);
         let e0 = LNatSize::new_empty();
 
-        assert_eq!(LNatSize::linear_acc(&vec![], 0.0, None), LNatSize::new_empty());
-        assert_eq!(LNatSize::linear_acc(&vec![], 0.0, Some(0)), LNatSize::new_empty());
-        assert_eq!(LNatSize::linear_acc(&vec![], 100.0, None), LNatSize::new_empty());
-        assert_eq!(LNatSize::linear_acc(&vec![], 100.0, Some(0)), LNatSize::new_empty());
+        assert_eq!(LNatSize::linear_acc(vec![].into_iter(), 0.0, None),
+            LNatSize::new_empty());
+        assert_eq!(LNatSize::linear_acc(vec![].into_iter(), 0.0, Some(0)),
+            LNatSize::new_empty());
+        assert_eq!(LNatSize::linear_acc(vec![].into_iter(), 100.0, None),
+            LNatSize::new_empty());
+        assert_eq!(LNatSize::linear_acc(vec![].into_iter(), 100.0, Some(0)),
+            LNatSize::new_empty());
 
-        assert_eq!(LNatSize::linear_acc(&vec![&a], 0.0, None), LNatSize::new_size(10.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a], 0.0, Some(0)), LNatSize::new_ref(7.0, 3.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a], 100.0, None), LNatSize::new_size(10.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a], 100.0, Some(0)), LNatSize::new_ref(7.0, 3.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a].into_iter(), 0.0, None),
+            LNatSize::new_size(10.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a].into_iter(), 0.0, Some(0)),
+            LNatSize::new_ref(7.0, 3.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a].into_iter(), 100.0, None),
+            LNatSize::new_size(10.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a].into_iter(), 100.0, Some(0)),
+            LNatSize::new_ref(7.0, 3.0));
 
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b], 0.0, None), LNatSize::new_size(30.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b], 0.0, Some(0)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b].into_iter(), 0.0, None),
+            LNatSize::new_size(30.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b].into_iter(), 0.0, Some(0)),
             LNatSize::new_ref(7.0, 23.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b], 0.0, Some(1)),
-        LNatSize::new_ref(21.0, 9.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b], 100.0, None), LNatSize::new_size(130.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b], 100.0, Some(0)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b].into_iter(), 0.0, Some(1)),
+            LNatSize::new_ref(21.0, 9.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b].into_iter(), 100.0, None),
+            LNatSize::new_size(130.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b].into_iter(), 100.0, Some(0)),
             LNatSize::new_ref(7.0, 123.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b], 100.0, Some(1)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b].into_iter(), 100.0, Some(1)),
             LNatSize::new_ref(121.0, 9.0));
 
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b, &c], 0.0, None), LNatSize::new_size(45.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b, &c], 0.0, Some(0)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b, &c].into_iter(), 0.0, None),
+            LNatSize::new_size(45.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b, &c].into_iter(), 0.0, Some(0)),
             LNatSize::new_ref(7.0, 38.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b, &c], 0.0, Some(1)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b, &c].into_iter(), 0.0, Some(1)),
             LNatSize::new_ref(21.0, 24.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b, &c], 0.0, Some(2)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b, &c].into_iter(), 0.0, Some(2)),
             LNatSize::new_ref(35.0, 10.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b, &c], 100.0, None),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b, &c].into_iter(), 100.0, None),
             LNatSize::new_size(245.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b, &c], 100.0, Some(0)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b, &c].into_iter(), 100.0, Some(0)),
             LNatSize::new_ref(7.0, 238.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b, &c], 100.0, Some(1)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b, &c].into_iter(), 100.0, Some(1)),
             LNatSize::new_ref(121.0, 124.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &b, &c], 100.0, Some(2)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &b, &c].into_iter(), 100.0, Some(2)),
             LNatSize::new_ref(235.0, 10.0));
 
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &e0, &b], 0.0, None), LNatSize::new_size(30.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &e0, &b], 0.0, Some(0)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &e0, &b].into_iter(), 0.0, None),
+            LNatSize::new_size(30.0));
+        assert_eq!(LNatSize::linear_acc(vec![&a, &e0, &b].into_iter(), 0.0, Some(0)),
             LNatSize::new_ref(7.0, 23.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &e0, &b], 0.0, Some(1)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &e0, &b].into_iter(), 0.0, Some(1)),
             LNatSize::new_ref(10.0, 20.0));
-        assert_eq!(LNatSize::linear_acc(&vec![&a, &e0, &b], 0.0, Some(2)),
+        assert_eq!(LNatSize::linear_acc(vec![&a, &e0, &b].into_iter(), 0.0, Some(2)),
             LNatSize::new_ref(21.0, 9.0));
     }
 
@@ -861,23 +909,27 @@ mod tests {
         let r1_1 = LNatSize::new_ref(1.0, 1.0);
         let r3_2 = LNatSize::new_ref(3.0, 2.0);
         let r2_6 = LNatSize::new_ref(2.0, 6.0);
-        let r6_4 = LNatSize::new_ref(6.0, 4.0);
-        let r12_8 = LNatSize::new_ref(12.0, 8.0);
 
-        assert_eq!(LNatSize::perpendicular_acc(&vec![]), LNatSize::new_empty());
-        assert_eq!(LNatSize::perpendicular_acc(&vec![&et]), LNatSize::new_empty());
-        assert_eq!(LNatSize::perpendicular_acc(&vec![&et, &et]), LNatSize::new_empty());
+        assert_eq!(LNatSize::perpendicular_acc(vec![].into_iter()), LNatSize::new_empty());
+        assert_eq!(LNatSize::perpendicular_acc(vec![&et].into_iter()), LNatSize::new_empty());
+        assert_eq!(LNatSize::perpendicular_acc(vec![&et, &et].into_iter()), LNatSize::new_empty());
 
-        assert_eq!(LNatSize::perpendicular_acc(&vec![&s2]), LNatSize::new_size(2.0));
-        assert_eq!(LNatSize::perpendicular_acc(&vec![&s2, &s5]), LNatSize::new_size(5.0));
-        assert_eq!(LNatSize::perpendicular_acc(&vec![&s2, &s5, &s10]), LNatSize::new_size(10.0));
+        assert_eq!(LNatSize::perpendicular_acc(vec![&s2].into_iter()), LNatSize::new_size(2.0));
+        assert_eq!(LNatSize::perpendicular_acc(vec![&s2, &s5].into_iter()),
+            LNatSize::new_size(5.0));
+        assert_eq!(LNatSize::perpendicular_acc(vec![&s2, &s5, &s10].into_iter()),
+            LNatSize::new_size(10.0));
 
-        assert_eq!(LNatSize::perpendicular_acc(&vec![&r1_1]), LNatSize::new_ref(1.0, 1.0));
-        assert_eq!(LNatSize::perpendicular_acc(&vec![&r1_1, &r3_2]), LNatSize::new_ref(3.0, 2.0));
-        assert_eq!(LNatSize::perpendicular_acc(&vec![&r3_2, &r2_6]), LNatSize::new_ref(3.0, 6.0));
-        assert_eq!(LNatSize::perpendicular_acc(&vec![&r3_2, &r2_6, &s10]),
+        assert_eq!(LNatSize::perpendicular_acc(vec![&r1_1].into_iter()),
+            LNatSize::new_ref(1.0, 1.0));
+        assert_eq!(LNatSize::perpendicular_acc(vec![&r1_1, &r3_2].into_iter()),
+            LNatSize::new_ref(3.0, 2.0));
+        assert_eq!(LNatSize::perpendicular_acc(vec![&r3_2, &r2_6].into_iter()),
+            LNatSize::new_ref(3.0, 6.0));
+        assert_eq!(LNatSize::perpendicular_acc(vec![&r3_2, &r2_6, &s10].into_iter()),
             LNatSize::new_ref(3.5, 6.5));
-        assert_eq!(LNatSize::perpendicular_acc(&vec![&r3_2, &s10]), LNatSize::new_ref(5.5, 4.5));
+        assert_eq!(LNatSize::perpendicular_acc(vec![&r3_2, &s10].into_iter()),
+            LNatSize::new_ref(5.5, 4.5));
     }
 
     #[test]
@@ -920,17 +972,17 @@ mod tests {
         let l1_2 = LFlex::new_flex(1.0, 2.0);
         let l3_8 = LFlex::new_flex(3.0, 8.0);
 
-        assert_eq!(LFlex::linear_acc(&vec![]), LFlex::new_fixed());
-        assert_eq!(LFlex::linear_acc(&vec![&d]), LFlex::new_fixed());
-        assert_eq!(LFlex::linear_acc(&vec![&d, &d]), LFlex::new_fixed());
+        assert_eq!(LFlex::linear_acc(vec![].into_iter()), LFlex::new_fixed());
+        assert_eq!(LFlex::linear_acc(vec![&d].into_iter()), LFlex::new_fixed());
+        assert_eq!(LFlex::linear_acc(vec![&d, &d].into_iter()), LFlex::new_fixed());
 
-        assert_eq!(LFlex::linear_acc(&vec![&l1_2]), LFlex::new_flex(1.0, 2.0));
-        assert_eq!(LFlex::linear_acc(&vec![&d, &l1_2]), LFlex::new_flex(1.0, 2.0));
-        assert_eq!(LFlex::linear_acc(&vec![&l1_2, &d]), LFlex::new_flex(1.0, 2.0));
+        assert_eq!(LFlex::linear_acc(vec![&l1_2].into_iter()), LFlex::new_flex(1.0, 2.0));
+        assert_eq!(LFlex::linear_acc(vec![&d, &l1_2].into_iter()), LFlex::new_flex(1.0, 2.0));
+        assert_eq!(LFlex::linear_acc(vec![&l1_2, &d].into_iter()), LFlex::new_flex(1.0, 2.0));
 
-        assert_eq!(LFlex::linear_acc(&vec![&l1_2, &l3_8]), LFlex::new_flex(4.0, 10.0));
-        assert_eq!(LFlex::linear_acc(&vec![&d, &l1_2, &l3_8]), LFlex::new_flex(4.0, 10.0));
-        assert_eq!(LFlex::linear_acc(&vec![&l1_2, &l3_8, &d]), LFlex::new_flex(4.0, 10.0));
+        assert_eq!(LFlex::linear_acc(vec![&l1_2, &l3_8].into_iter()), LFlex::new_flex(4.0, 10.0));
+        assert_eq!(LFlex::linear_acc(vec![&d, &l1_2, &l3_8].into_iter()), LFlex::new_flex(4.0, 10.0));
+        assert_eq!(LFlex::linear_acc(vec![&l1_2, &l3_8, &d].into_iter()), LFlex::new_flex(4.0, 10.0));
     }
 
     #[test]
@@ -951,7 +1003,7 @@ mod tests {
         assert_eq!(a.size(), &LNatSize::new_empty());
         assert_eq!(a.flex(), &LFlex::new_fixed());
 
-        let b = LReq::new(&LNatSize::new_ref(1.0, 2.0), &LFlex::new_flex(3.0, 4.0));
+        let b = LReq::new(LNatSize::new_ref(1.0, 2.0), LFlex::new_flex(3.0, 4.0));
         assert_eq!(b.size(), &LNatSize::new_ref(1.0, 2.0));
         assert_eq!(b.flex(), &LFlex::new_flex(3.0, 4.0));
 
@@ -1114,7 +1166,6 @@ mod tests {
         let dr0 = LReq::new_fixed_ref(7.0, 3.0);
         let dr1 = LReq::new_fixed_ref(14.0, 6.0);
         let gl0 = LReq::new_flex_size(10.0, 1.0, 2.0);
-        let gl1 = LReq::new_flex_size(10.0, 2.0, 3.0);
 
         assert_eq!(LReq::linear_acc(&vec![], 0.0, None), LReq::new_empty());
         assert_eq!(LReq::linear_acc(&vec![&ds0], 0.0, None), ds0);
@@ -1164,40 +1215,19 @@ mod tests {
     }
 
 
-    pub enum LSize2 {
-        Fixed{size: f64},
-        Flex{natural: f64, shrink: f64, stretch: f32}
-    }
-
-    pub enum LReq2 {
-        Simple{size: LSize2},
-        Ref{before: LSize2, after: LSize2}
-    }
-
-    #[test]
-    fn test_LSize2_mem() {
-        assert_eq!(mem::size_of::<LSize2>(), 32);
-    }
-
-    #[test]
-    fn test_LReq2_mem() {
-        assert_eq!(mem::size_of::<LReq2>(), 72);
-    }
-
-
     #[bench]
     fn bench_lsize_linear_acc(bench: &mut test::Bencher) {
-        let n = 1024;
-        let r = 32;
+        let num_children = 100;
+        let num_parents = 100;
 
         let kind_range: Range<i32> = Range::new(0, 8);
         let size_range = Range::new(5.0, 25.0);
         let mut rng = rand::thread_rng();
 
-        let mut children = Vec::with_capacity(n);
-        let mut parents = Vec::with_capacity(r);
+        let mut children = Vec::with_capacity(num_children);
+        let mut parents = Vec::with_capacity(num_parents);
 
-        for _ in 0..n {
+        for _ in 0..num_children {
             let x = match kind_range.ind_sample(&mut rng) {
                 0 => LNatSize::new_empty(),
                 1 ... 4 => LNatSize::new_size(size_range.ind_sample(&mut rng)),
@@ -1207,12 +1237,10 @@ mod tests {
             children.push(x);
         }
 
-        let child_refs: Vec<&LNatSize> = children.iter().collect();
-
         bench.iter(|| {
             parents.clear();
-            for _ in 0..r {
-                let p = LNatSize::linear_acc(&child_refs, 3.0, None);
+            for _ in 0..num_parents {
+                let p = LNatSize::linear_acc(children.iter(), 3.0, None);
                 parents.push(p);
             }
         });
@@ -1220,17 +1248,17 @@ mod tests {
 
     #[bench]
     fn bench_lsize_perpendicular_acc(bench: &mut test::Bencher) {
-        let n = 1024;
-        let r = 32;
+        let num_children = 100;
+        let num_parents = 100;
 
         let kind_range: Range<i32> = Range::new(0, 8);
         let size_range = Range::new(5.0, 25.0);
         let mut rng = rand::thread_rng();
 
-        let mut children = Vec::with_capacity(n);
-        let mut parents = Vec::with_capacity(r);
+        let mut children = Vec::with_capacity(num_children);
+        let mut parents = Vec::with_capacity(num_parents);
 
-        for _ in 0..n {
+        for _ in 0..num_children {
             let x = match kind_range.ind_sample(&mut rng) {
                 0 => LNatSize::new_empty(),
                 1 ... 4 => LNatSize::new_size(size_range.ind_sample(&mut rng)),
@@ -1240,12 +1268,95 @@ mod tests {
             children.push(x);
         }
 
-        let child_refs: Vec<&LNatSize> = children.iter().collect();
+        bench.iter(|| {
+            parents.clear();
+            for _ in 0..num_parents {
+                let p = LNatSize::perpendicular_acc(children.iter());
+                parents.push(p);
+            }
+        });
+    }
+
+
+    #[bench]
+    fn bench_lreq_linear_acc(bench: &mut test::Bencher) {
+        let num_children = 100;
+        let num_parents = 100;
+
+        let natsize_type_range: Range<i32> = Range::new(0, 8);
+        let size_range = Range::new(5.0, 25.0);
+        let flex_type_range: Range<i32> = Range::new(0, 2);
+        let flex_range = Range::new(1.0, 3.0);
+        let mut rng = rand::thread_rng();
+
+        let mut children = Vec::with_capacity(num_children);
+        let mut parents = Vec::with_capacity(num_parents);
+
+        for _ in 0..num_children
+         {
+            let size = match natsize_type_range.ind_sample(&mut rng) {
+                0 => LNatSize::new_empty(),
+                1 ... 4 => LNatSize::new_size(size_range.ind_sample(&mut rng)),
+                _ => {LNatSize::new_ref(size_range.ind_sample(&mut rng) * 0.5,
+                                     size_range.ind_sample(&mut rng) * 0.5)}
+            };
+            let flex = match flex_type_range.ind_sample(&mut rng) {
+                0 => LFlex::new_fixed(),
+                1 => LFlex::new_flex(flex_range.ind_sample(&mut rng),
+                                     flex_range.ind_sample(&mut rng) as f32),
+                _ => {panic!();},
+            };
+            children.push(LReq::new(size, flex));
+        }
+
+        let child_refs: Vec<&LReq> = children.iter().collect();
 
         bench.iter(|| {
             parents.clear();
-            for _ in 0..r {
-                let p = LNatSize::perpendicular_acc(&child_refs);
+            for _ in 0..num_parents {
+                let p = LReq::linear_acc(&child_refs, 3.0, None);
+                parents.push(p);
+            }
+        });
+    }
+
+    #[bench]
+    fn bench_lreq_perpendicular_acc(bench: &mut test::Bencher) {
+        let num_children = 100;
+        let num_parents = 100;
+
+        let natsize_type_range: Range<i32> = Range::new(0, 8);
+        let size_range = Range::new(5.0, 25.0);
+        let flex_type_range: Range<i32> = Range::new(0, 2);
+        let flex_range = Range::new(1.0, 3.0);
+        let mut rng = rand::thread_rng();
+
+        let mut children = Vec::with_capacity(num_children);
+        let mut parents = Vec::with_capacity(num_parents
+            );
+
+        for _ in 0..num_children {
+            let size = match natsize_type_range.ind_sample(&mut rng) {
+                0 => LNatSize::new_empty(),
+                1 ... 4 => LNatSize::new_size(size_range.ind_sample(&mut rng)),
+                _ => {LNatSize::new_ref(size_range.ind_sample(&mut rng) * 0.5,
+                                     size_range.ind_sample(&mut rng) * 0.5)}
+            };
+            let flex = match flex_type_range.ind_sample(&mut rng) {
+                0 => LFlex::new_fixed(),
+                1 => LFlex::new_flex(flex_range.ind_sample(&mut rng),
+                                     flex_range.ind_sample(&mut rng) as f32),
+                _ => {panic!();},
+            };
+            children.push(LReq::new(size, flex));
+        }
+
+        let child_refs: Vec<&LReq> = children.iter().collect();
+
+        bench.iter(|| {
+            parents.clear();
+            for _ in 0..num_parents {
+                let p = LReq::perpendicular_acc(&child_refs);
                 parents.push(p);
             }
         });
