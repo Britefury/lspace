@@ -301,6 +301,26 @@ impl LNatSize {
         }
     }
 
+    /// Indent a box; add the supplied amount of space from the start
+    pub fn indent(&self, indent: f64) -> LNatSize {
+        match self {
+            &LNatSize::Empty => *self,
+            &LNatSize::Size{size} => LNatSize::Size{size: size + indent},
+            &LNatSize::Ref{before, after} =>
+                LNatSize::Ref{before: before + indent, after: after},
+        }
+    }
+
+    /// Dedent a box; remove the supplied amount of space from the start
+    pub fn dedent(&self, dedent: f64) -> LNatSize {
+        match self {
+            &LNatSize::Empty => *self,
+            &LNatSize::Size{size} => LNatSize::Size{size: fast_max(size - dedent, 0.0)},
+            &LNatSize::Ref{before, after} =>
+                LNatSize::Ref{before: fast_max(before - dedent, 0.0), after: after},
+        }
+    }
+
     /// Cumulatively combine the space requirements of a vector of `LNatSize` instances, along
     /// the axis described by the `LNatSize` instances.
     ///
@@ -429,8 +449,17 @@ impl LFlex {
         }
     }
 
+    /// Get the minimum space requirement of the given `LNatSize`
+    fn min_size(&self, sz: &LNatSize) -> f64 {
+        match (self, sz) {
+            (_, &LNatSize::Empty) => 0.0,
+            (&LFlex::Fixed, x) => x.size(),
+            (&LFlex::Flex{shrink, ..}, x) => x.size() - shrink,
+        }
+    }
+
     /// Private helper: get the minimum space requirement of the given `LNatSize`
-    fn min_size(&self, sz: &LNatSize) -> Option<f64> {
+    fn min_size_opt(&self, sz: &LNatSize) -> Option<f64> {
         match (self, sz) {
             (_, &LNatSize::Empty) => None,
             (&LFlex::Fixed, x) => Some(x.size()),
@@ -542,6 +571,11 @@ impl LReq {
         return self.flex != LFlex::Fixed;
     }
 
+    /// Determine the minimum size of self
+    pub fn min_size(&self) -> f64 {
+        return self.flex.min_size(&self.size);
+    }
+
     /// Add two size requests (`LReq` instances) together, resulting in an `LReq` whose
     /// size does NOT have a reference point.
     /// See `LNatSize::add` for more information; this method combines `LNatSize::add` and
@@ -591,12 +625,22 @@ impl LReq {
     /// Effectively performs the same function as `LNatSize::max`, but taking the flexibility
     /// specified by `self.flex()` into account.
     pub fn max(&self, other: &LReq) -> LReq {
-        let min_size0 = self.flex.min_size(&self.size);
-        let min_size1 = other.flex.min_size(&other.size);
+        let min_size0 = self.flex.min_size_opt(&self.size);
+        let min_size1 = other.flex.min_size_opt(&other.size);
         let stretch = fast_maxopt(self.flex.stretch_opt(), other.flex.stretch_opt());
         let min_size = fast_maxopt(min_size0, min_size1);
         let size = self.size.max(&other.size);
         return LReq{size: size, flex: LReq::make_flex(size, min_size, stretch)};
+    }
+
+    /// Indent a box - remove the supplied amount of space from the start
+    pub fn indent(&self, indent: f64) -> LReq {
+        return LReq{size: self.size.indent(indent), flex: self.flex};
+    }
+
+    /// Dedent a box - remove the supplied amount of space from the start
+    pub fn dedent(&self, dedent: f64) -> LReq {
+        return LReq{size: self.size.dedent(dedent), flex: self.flex};
     }
 
     /// Cumulatively combine the space requirements of a vector of `LReq` instances, along
@@ -607,7 +651,7 @@ impl LReq {
     ///
     /// See `LNatSize::linear_acc` for more info; this does the same thing but taking
     /// flexibiity into account
-    pub fn linear_acc(reqs: &Vec<&LReq>, space_between: f64,
+    pub fn linear_acc(reqs: &[&LReq], space_between: f64,
                       ref_point_index: Option<usize>) -> LReq {
         // If there is no reference point index, we can filter out empty items before calling
         // LNatSize::linear_acc
@@ -637,36 +681,32 @@ impl LReq {
     ///
     /// See `LNatSize::perpendicular_acc` for more info; this does the same thing but taking
     /// flexibiity into account.
-    pub fn perpendicular_acc(reqs: &Vec<&LReq>) -> LReq {
+    pub fn perpendicular_acc(reqs: &[&LReq]) -> LReq {
         // Would prefer to use an iterator based solutions above for the purpose of elegance, but
         // walking the array in a single loop is faster
         let mut max_min_size = 0.0;
-        let mut got_min_size = false;
         let mut max_stretch = 0.0;
-        let mut got_stretch = false;
+        let mut got_flex = false;
         for x in reqs {
-            match x.flex.min_size(&x.size()) {
-                None => {},
-                Some(m) => {
-                    max_min_size = fast_max(max_min_size, m);
-                    got_min_size = true;
-                }
-            }
-
             match x.flex {
-                LFlex::Fixed => {},
-                LFlex::Flex{stretch: s, ..} => {
-                    max_stretch = fast_max(max_stretch, s);
-                    got_stretch = true;
+                LFlex::Fixed => {
+                    max_min_size = fast_max(max_min_size, x.size().size());
+                    },
+                LFlex::Flex{stretch, shrink} => {
+                    max_min_size = fast_max(max_min_size, x.size().size() - shrink);
+                    max_stretch = fast_max(max_stretch, stretch);
+                    got_flex = true;
                 }
             }
         }
-        let min_size = if got_min_size {Some(max_min_size)} else {None};
-        let stretch = if got_stretch {Some(max_stretch)} else {None};
-
         let sz = LNatSize::perpendicular_acc(reqs.iter().map(|x| &x.size));
 
-        return LReq{size: sz, flex: LReq::make_flex(sz, min_size, stretch)};
+        if got_flex {
+            LReq{size: sz, flex: LFlex::Flex{shrink: sz.size() - max_min_size,
+                                             stretch: max_stretch}}
+        } else {
+            LReq{size: sz, flex: LFlex::new_fixed()}
+        }
     }
 }
 
@@ -806,6 +846,20 @@ mod tests {
             LNatSize::new_ref(6.0, 4.0));
         assert_eq!(LNatSize::new_ref(1.5, 1.0).max(&LNatSize::new_size(5.0)),
             LNatSize::new_ref(2.75, 2.25));
+    }
+
+    #[test]
+    fn test_lnatsize_indent() {
+        assert_eq!(LNatSize::new_empty().indent(10.0), LNatSize::new_empty());
+        assert_eq!(LNatSize::new_size(5.0).indent(10.0), LNatSize::new_size(15.0));
+        assert_eq!(LNatSize::new_ref(3.0, 2.0).indent(10.0), LNatSize::new_ref(13.0, 2.0));
+    }
+
+    #[test]
+    fn test_lnatsize_dedent() {
+        assert_eq!(LNatSize::new_empty().dedent(10.0), LNatSize::new_empty());
+        assert_eq!(LNatSize::new_size(15.0).dedent(10.0), LNatSize::new_size(5.0));
+        assert_eq!(LNatSize::new_ref(13.0, 2.0).dedent(10.0), LNatSize::new_ref(3.0, 2.0));
     }
 
     #[test]
@@ -1157,6 +1211,24 @@ mod tests {
             LReq::new_flex_size(12.0, 4.0, 0.0));
         assert_eq!(LReq::new_flex_size(12.0, 4.0, 1.0).max(&LReq::new_fixed_size(6.0)),
             LReq::new_flex_size(12.0, 4.0, 1.0));
+    }
+
+    #[test]
+    fn test_lreq_indent() {
+        assert_eq!(LReq::new_empty().indent(10.0), LReq::new_empty());
+        assert_eq!(LReq::new_fixed_size(5.0).indent(10.0), LReq::new_fixed_size(15.0));
+        assert_eq!(LReq::new_flex_size(5.0, 2.0, 3.0).indent(10.0), LReq::new_flex_size(15.0, 2.0, 3.0));
+        assert_eq!(LReq::new_fixed_ref(3.0, 2.0).indent(10.0), LReq::new_fixed_ref(13.0, 2.0));
+        assert_eq!(LReq::new_flex_ref(3.0, 2.0, 2.0, 3.0).indent(10.0), LReq::new_flex_ref(13.0, 2.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn test_lreq_dedent() {
+        assert_eq!(LReq::new_empty().dedent(10.0), LReq::new_empty());
+        assert_eq!(LReq::new_fixed_size(15.0).dedent(10.0), LReq::new_fixed_size(5.0));
+        assert_eq!(LReq::new_flex_size(15.0, 2.0, 3.0).dedent(10.0), LReq::new_flex_size(5.0, 2.0, 3.0));
+        assert_eq!(LReq::new_fixed_ref(13.0, 2.0).dedent(10.0), LReq::new_fixed_ref(3.0, 2.0));
+        assert_eq!(LReq::new_flex_ref(13.0, 2.0, 2.0, 3.0).dedent(10.0), LReq::new_flex_ref(3.0, 2.0, 2.0, 3.0));
     }
 
     #[test]

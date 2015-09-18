@@ -155,8 +155,8 @@ fn alloc_children_linear(n: usize, child_reqs: &[&LReq], child_allocs: &mut [&mu
 
 /// Allocation helper function
 /// Allocate child elements in a linear fashion, region has NO reference point
-fn alloc_children_linear_no_ref(n: usize, child_reqs: &Vec<&LReq>,
-                                child_allocs: &mut Vec<&mut LAlloc>,
+fn alloc_children_linear_no_ref(n: usize, child_reqs: &[&LReq],
+                                child_allocs: &mut [&mut LAlloc],
                                 region_req: &LReq, region_pos: f64, region_size: f64,
                                 space_between: f64) {
     match region_req.flex() {
@@ -180,8 +180,8 @@ fn alloc_children_linear_no_ref(n: usize, child_reqs: &Vec<&LReq>,
 
 /// Allocation helper function
 /// Allocate child elements in a linear fashion, region has reference point
-fn alloc_children_linear_with_ref(n: usize, child_reqs: &Vec<&LReq>,
-                                  child_allocs: &mut Vec<&mut LAlloc>,
+fn alloc_children_linear_with_ref(n: usize, child_reqs: &[&LReq],
+                                  child_allocs: &mut [&mut LAlloc],
                                   region_req: &LReq, region_pos: f64, region_size: f64,
                                   region_before_ref: f64, space_between: f64,
                                   ref_point_n: usize) {
@@ -348,6 +348,13 @@ impl LAlloc {
                       actual_size: actual_size, ref_point: Some(ref_point)};
     }
 
+    /// Construct a `LAlloc` that has enough space for the given `LReq` requisition
+    pub fn new_from_req(req: &LReq, pos_in_parent: f64) -> LAlloc {
+        let size = req.size().size();
+        return LAlloc{pos_in_parent: pos_in_parent, alloc_size: size, actual_size: size,
+                      ref_point: req.size().before_ref_opt()};
+    }
+
 
     /// Get position of this element relative to parent space.
     pub fn pos_in_parent(&self) -> f64 {
@@ -389,6 +396,18 @@ impl LAlloc {
         self.alloc_size = alloc_size;
         self.actual_size = actual_size;
         self.ref_point = Some(ref_point);
+    }
+
+    /// Indent - consume the requested amount of space from the start.
+    /// Note that it effectively does the opposite to the `LReq` method of the same name
+    pub fn indent(&self, indent: f64) -> LAlloc {
+        return LAlloc{pos_in_parent: self.pos_in_parent + indent,
+                      alloc_size: self.alloc_size - indent,
+                      actual_size: self.actual_size - indent,
+                      ref_point: match self.ref_point {
+                            Some(r) => Some(r - indent),
+                            None => None
+                        }};
     }
 
     /// Allocate this element - a child element - space in the specified region that would be
@@ -490,7 +509,7 @@ impl LAlloc {
     /// `space_between` : the amount of space to insert between child elements
     /// `ref_point_index` : an optional index that identifies a child element that is to have its
     /// reference point aligned with that of the region
-    pub fn alloc_linear(child_reqs: &Vec<&LReq>, child_allocs: &mut Vec<&mut LAlloc>,
+    pub fn alloc_linear(child_reqs: &[&LReq], child_allocs: &mut [&mut LAlloc],
                         region_req: &LReq, region_pos: f64, region_size: f64,
                         region_ref: Option<f64>, space_between: f64,
                         ref_point_index: Option<usize>) {
@@ -828,6 +847,14 @@ mod tests {
         assert_eq!(b.alloc_size(), 10.0);
         assert_eq!(b.actual_size(), 20.0);
         assert_eq!(b.ref_point(), Some(5.0));
+    }
+
+    #[test]
+    fn test_lalloc_indent() {
+        assert_eq!(LAlloc::new(0.0, 8.0, 10.0).indent(2.0),
+                   LAlloc::new(2.0, 6.0, 8.0));
+        assert_eq!(LAlloc::new_ref(0.0, 8.0, 10.0, 4.0).indent(2.0),
+                   LAlloc::new_ref(2.0, 6.0, 8.0, 2.0));
     }
 
     fn _alloc_region(req: &LReq, region_pos: f64, region_size: f64) -> LAlloc {
