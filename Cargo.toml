@@ -6,6 +6,8 @@ authors = [ "Geoffrey French <brittix1023@gmail.com>" ]
 [dependencies]
 time = "0.1"
 rand = "0.3"
+gtk = "*"
+cairo-rs = "*"
 
 [profile.bench]
 opt-level = 3
@@ -14,3 +16,6 @@ debug = true
 [lib]
 name = "lspace"
 path = "src/lib/lspace/mod.rs"
+
+[[bin]]
+name = "rendering_test"
