@@ -1,7 +1,7 @@
 use cairo::Context;
 
 use std::rc::Rc;
-use std::cell::RefCell;
+use std::cell::{RefCell, Ref, RefMut};
 
 use layout::lreq::LReq;
 use layout::lalloc::LAlloc;
@@ -16,21 +16,21 @@ const LAYOUT_FLAGS_ALL_CLEAN: u8        = 0b00000000;
 
 
 pub struct ElementChildRef {
-    x: Box<TElement>
+    x: Rc<RefCell<Box<TElement>>>
 }
 
 
 impl ElementChildRef {
     pub fn new<T: TElement + 'static>(x: T) -> ElementChildRef {
-        return ElementChildRef{x: Box::new(x)};
+        return ElementChildRef{x: Rc::new(RefCell::new(Box::new(x)))};
     }
 
-    pub fn get<'a>(&'a self) -> &'a TElement {
-        return &*self.x;
+    pub fn get(&self) -> Ref<Box<TElement>> {
+        return self.x.borrow();
     }
 
-    pub fn get_mut<'a>(&'a mut self) -> &'a mut TElement {
-        return &mut *self.x;
+    pub fn get_mut(&mut self) -> RefMut<Box<TElement>> {
+        return self.x.borrow_mut();
     }
 }
 

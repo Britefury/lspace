@@ -1,5 +1,7 @@
 use cairo::Context;
 
+use std::cell::{Ref, RefMut};
+
 use layout::lreq::LReq;
 use layout::lalloc::LAlloc;
 use layout::flow_layout;
@@ -50,14 +52,16 @@ impl TElement for FlowElement {
 
     fn update_x_req(&mut self) {
         self.update_children_x_req();
-        let child_x_reqs: Vec<&LReq> = self.children.iter().map(|c| c.get().x_req()).collect();
+        let child_refs: Vec<Ref<Box<TElement>>> = self.children.iter().map(|c| c.get()).collect();
+        let child_x_reqs: Vec<&LReq> = child_refs.iter().map(|c| c.x_req()).collect();
         self.req.x_req = flow_layout::requisition_x(&child_x_reqs, self.x_spacing, self.indentation);
     }
 
     fn allocate_x(&mut self) {
         {
-            let mut x_pairs: Vec<(&LReq, &mut LAlloc)> = self.children.iter_mut().map(
-                    |c| c.get_mut().x_req_and_mut_alloc()).collect();
+            let mut child_refs: Vec<RefMut<Box<TElement>>> = self.children.iter_mut().map(|c| c.get_mut()).collect();
+            let mut x_pairs: Vec<(&LReq, &mut LAlloc)> = child_refs.iter_mut().map(
+                    |c| c.x_req_and_mut_alloc()).collect();
             self.lines = flow_layout::alloc_x(&self.req.x_req,
                     &self.alloc.x_alloc.without_position(),
                     &mut x_pairs, self.x_spacing, self.indentation);
@@ -68,14 +72,16 @@ impl TElement for FlowElement {
 
     fn update_y_req(&mut self) {
         self.update_children_y_req();
-        let child_y_reqs: Vec<&LReq> = self.children.iter().map(|c| c.get().y_req()).collect();
+        let child_refs: Vec<Ref<Box<TElement>>> = self.children.iter().map(|c| c.get()).collect();
+        let child_y_reqs: Vec<&LReq> = child_refs.iter().map(|c| c.y_req()).collect();
         self.req.y_req = flow_layout::requisition_y(&child_y_reqs, self.y_spacing, &mut self.lines);
     }
 
     fn allocate_y(&mut self) {
         {
-            let mut y_pairs: Vec<(&LReq, &mut LAlloc)> = self.children.iter_mut().map(
-                    |c| c.get_mut().y_req_and_mut_alloc()).collect();
+            let mut child_refs: Vec<RefMut<Box<TElement>>> = self.children.iter_mut().map(|c| c.get_mut()).collect();
+            let mut y_pairs: Vec<(&LReq, &mut LAlloc)> = child_refs.iter_mut().map(
+                    |c| c.y_req_and_mut_alloc()).collect();
             flow_layout::alloc_y(&self.req.y_req,
                 &self.alloc.y_alloc.without_position(),
                 &mut y_pairs, self.y_spacing, &mut self.lines);
