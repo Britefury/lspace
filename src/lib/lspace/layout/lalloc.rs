@@ -1,4 +1,5 @@
-use layout::lreq::{LNatSize, LFlex, LReq, fast_min, fast_max};
+use geom::fastminmax::{fast_min, fast_max};
+use layout::lreq::{LNatSize, LFlex, LReq};
 
 pub const EPSILON : f64 = 1.0e-6;
 pub const ONE_MINUS_EPSILON : f64 = 1.0 - EPSILON;
@@ -597,7 +598,8 @@ mod tests {
     use std::mem;
     use self::rand::distributions::{Range, IndependentSample};
     use super::*;
-    use layout::lreq::{LNatSize, LFlex, LReq, fast_max, fast_min};
+    use geom::fastminmax::{fast_min, fast_max};
+    use layout::lreq::{LNatSize, LFlex, LReq};
 
     const ALMOST_EQ_EPSILON: f64 = 1.0e-6;
 

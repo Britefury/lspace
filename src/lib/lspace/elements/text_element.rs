@@ -5,7 +5,7 @@ use std::string::String;
 use cairo::Context;
 
 use layout::lalloc::LAlloc;
-use graphics::bbox2::BBox2;
+use geom::bbox2::BBox2;
 use elements::element_ctx::{ElementContext};
 use elements::element::{ElementReq, ElementAlloc, TElementLayout, TElement};
 

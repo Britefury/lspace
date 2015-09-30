@@ -1,4 +1,4 @@
-use std::ops::{Add, Sub, Mul};
+use std::ops::{Add, Sub, Mul, Neg};
 
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -14,6 +14,14 @@ impl Vector2 {
 
     pub fn zero() -> Vector2 {
         return Vector2{x: 0.0, y: 0.0};
+    }
+
+    pub fn sqr_length(&self) -> f64 {
+        return self.x * self.x + self.y * self.y;
+    }
+
+    pub fn length(&self) -> f64 {
+        return self.sqr_length().sqrt();
     }
 }
 
@@ -85,7 +93,6 @@ impl <'a> Sub<Vector2> for &'a Vector2 {
     }
 }
 
-
 // MULTIPLICATION
 
 impl Mul<f64> for Vector2 {
@@ -101,6 +108,24 @@ impl <'a> Mul<f64> for &'a Vector2 {
 
     fn mul(self, b: f64) -> Vector2 {
         return Vector2{x: self.x * b, y: self.y * b};
+    }
+}
+
+// NEGATION
+
+impl Neg for Vector2 {
+    type Output=Vector2;
+
+    fn neg(self) -> Vector2 {
+        return Vector2{x: -self.x, y: -self.y};
+    }
+}
+
+impl <'a> Neg for &'a Vector2 {
+    type Output=Vector2;
+
+    fn neg(self) -> Vector2 {
+        return Vector2{x: -self.x, y: -self.y};
     }
 }
 
@@ -124,6 +149,12 @@ mod tests {
     }
 
     #[test]
+    fn test_length() {
+        assert_eq!(Vector2::new(3.0, 4.0).sqr_length(), 25.0);
+        assert_eq!(Vector2::new(3.0, 4.0).length(), 5.0);
+    }
+
+    #[test]
     fn test_add() {
         assert_eq!(Vector2::new(1.0, 2.0) + Vector2::new(2.0, 3.0), Vector2::new(3.0, 5.0));
         assert_eq!(&Vector2::new(1.0, 2.0) + Vector2::new(2.0, 3.0), Vector2::new(3.0, 5.0));
@@ -143,5 +174,11 @@ mod tests {
     fn test_mul() {
         assert_eq!(Vector2::new(1.0, 2.0) * 2.0, Vector2::new(2.0, 4.0));
         assert_eq!(&Vector2::new(1.0, 2.0) * 2.0, Vector2::new(2.0, 4.0));
+    }
+
+    #[test]
+    fn test_neg() {
+        assert_eq!(-Vector2::new(1.0, 2.0), Vector2::new(-1.0, -2.0));
+        assert_eq!(-&Vector2::new(1.0, 2.0), Vector2::new(-1.0, -2.0));
     }
 }

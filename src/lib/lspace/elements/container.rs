@@ -1,7 +1,7 @@
 use cairo::Context;
 
-use graphics::vector2::Vector2;
-use graphics::bbox2::BBox2;
+use geom::vector2::Vector2;
+use geom::bbox2::BBox2;
 
 use elements::element::{TElement, ElementChildRef};
 

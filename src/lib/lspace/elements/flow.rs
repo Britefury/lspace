@@ -3,7 +3,7 @@ use cairo::Context;
 use layout::lreq::LReq;
 use layout::lalloc::LAlloc;
 use layout::flow_layout;
-use graphics::bbox2::BBox2;
+use geom::bbox2::BBox2;
 
 use elements::element::{ElementReq, ElementAlloc, TElementLayout, TElement, ElementChildRef};
 use elements::container::TContainerElement;

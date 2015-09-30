@@ -7,9 +7,9 @@ extern crate cairo;
 extern crate gtk;
 
 
+pub mod geom;
 pub mod layout;
-pub mod graphics;
-pub mod pres;
 pub mod elements;
+pub mod pres;
 
 pub mod lspace_area;

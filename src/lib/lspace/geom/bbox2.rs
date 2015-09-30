@@ -1,7 +1,8 @@
 use std::ops::Add;
 use layout::lalloc::LAlloc;
-use graphics::vector2::Vector2;
-use graphics::point2::Point2;
+use geom::fastminmax::{fast_min, fast_max};
+use geom::vector2::Vector2;
+use geom::point2::Point2;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct BBox2 {
@@ -31,6 +32,15 @@ impl BBox2 {
                                         lower.y + y_alloc.actual_size())};
     }
 
+    pub fn centre(&self) -> Point2 {
+        return Point2::new((self.lower.x + self.upper.x) * 0.5,
+                           (self.lower.y + self.upper.y) * 0.5);
+    }
+
+    pub fn size(&self) -> Vector2 {
+        return self.upper - self.lower;
+    }
+
     pub fn offset(&self, v: &Vector2) -> BBox2 {
         return BBox2{lower: self.lower + v, upper: self.upper + v};
     }
@@ -44,6 +54,18 @@ impl BBox2 {
         return self.lower.x < r.upper.x && self.lower.y < r.upper.y &&
                self.upper.x > r.lower.x && self.upper.y > r.lower.y;
     }
+
+    pub fn intersection(&self, r: &BBox2) -> Option<BBox2> {
+        let lx = fast_max(self.lower.x, r.lower.x);
+        let ly = fast_max(self.lower.y, r.lower.y);
+        let ux = fast_min(self.upper.x, r.upper.x);
+        let uy = fast_min(self.upper.y, r.upper.y);
+        if lx <= ux && ly <= uy {
+            return Some(BBox2::new(Point2::new(lx, ly), Point2::new(ux, uy)));
+        } else {
+            return None;
+        }
+    }
 }
 
 //
@@ -56,8 +78,8 @@ mod tests {
 
     use std::mem;
     use super::*;
-    use graphics::vector2::Vector2;
-    use graphics::point2::Point2;
+    use geom::vector2::Vector2;
+    use geom::point2::Point2;
     use layout::lalloc::LAlloc;
 
     #[test]
@@ -75,6 +97,14 @@ mod tests {
         assert_eq!(BBox2::from_allocs(&LAlloc::new(2.0, 10.0, 10.0),
                                       &LAlloc::new(10.0, 30.0, 30.0)),
                    BBox2::new(Point2::new(2.0, 10.0), Point2::new(12.0, 40.0)));
+    }
+
+    #[test]
+    fn test_dims() {
+        assert_eq!(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).centre(),
+                    Point2::new(5.5, 11.0));
+        assert_eq!(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).size(),
+                    Vector2::new(9.0, 18.0));
     }
 
     #[test]
@@ -121,5 +151,34 @@ mod tests {
                 &BBox2::new(Point2::new(1.0, -20.0), Point2::new(10.0, 1.0))));
         assert!(!BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).intersects(
                 &BBox2::new(Point2::new(1.0, 22.0), Point2::new(10.0, 40.0))));
+    }
+
+    #[test]
+    fn test_intersection() {
+        assert_eq!(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).intersection(
+                        &BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0))),
+                Some(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0))));
+
+        assert_eq!(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).intersection(
+                        &BBox2::new(Point2::new(9.0, 2.0), Point2::new(20.0, 20.0))),
+                Some(BBox2::new(Point2::new(9.0, 2.0), Point2::new(10.0, 20.0))));
+        assert_eq!(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).intersection(
+                        &BBox2::new(Point2::new(-9.0, 2.0), Point2::new(2.0, 20.0))),
+                Some(BBox2::new(Point2::new(1.0, 2.0), Point2::new(2.0, 20.0))));
+        assert_eq!(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).intersection(
+                        &BBox2::new(Point2::new(1.0, -20.0), Point2::new(10.0, 4.0))),
+                Some(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 4.0))));
+        assert_eq!(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).intersection(
+                        &BBox2::new(Point2::new(1.0, 18.0), Point2::new(10.0, 40.0))),
+                Some(BBox2::new(Point2::new(1.0, 18.0), Point2::new(10.0, 20.0))));
+
+        assert_eq!(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).intersection(
+                        &BBox2::new(Point2::new(11.0, 2.0), Point2::new(20.0, 20.0))), None);
+        assert_eq!(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).intersection(
+                        &BBox2::new(Point2::new(-9.0, 2.0), Point2::new(0.0, 20.0))), None);
+        assert_eq!(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).intersection(
+                        &BBox2::new(Point2::new(1.0, -20.0), Point2::new(10.0, 1.0))), None);
+        assert_eq!(BBox2::new(Point2::new(1.0, 2.0), Point2::new(10.0, 20.0)).intersection(
+                        &BBox2::new(Point2::new(1.0, 22.0), Point2::new(10.0, 40.0))), None);
     }
 }

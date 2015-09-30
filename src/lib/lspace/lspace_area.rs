@@ -10,9 +10,9 @@ use gtk::traits::*;
 use gtk::signal::Inhibit;
 use cairo::{Context, RectangleInt};
 
-use graphics::vector2::Vector2;
-use graphics::point2::Point2;
-use graphics::bbox2::BBox2;
+use geom::vector2::Vector2;
+use geom::point2::Point2;
+use geom::bbox2::BBox2;
 use elements::element_ctx::ElementContext;
 use elements::element::{TElement};
 use elements::root_element::RootElement;
