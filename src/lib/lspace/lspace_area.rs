@@ -21,6 +21,7 @@ use gdk::{
     EventWindowState,
     Screen,
 };
+use gdk::ffi::GdkModifierType;
 use gtk;
 use gtk::traits::*;
 use gtk::signal::Inhibit;
@@ -29,6 +30,8 @@ use cairo::{Context, RectangleInt};
 use geom::vector2::Vector2;
 use geom::point2::Point2;
 use geom::bbox2::BBox2;
+use input::input_system::InputSystem;
+use input::pointer::PointerPosition;
 use elements::element_ctx::ElementContext;
 use elements::element::{TElement};
 use elements::root_element::RootElement;
@@ -39,6 +42,8 @@ use pres::primitive::root_containing;
 struct LSpaceAreaState {
     width: i32,
     height: i32,
+
+    input_system: InputSystem,
 
     elem_ctx: RefCell<ElementContext>,
 
@@ -52,7 +57,9 @@ struct LSpaceAreaState {
 
 impl LSpaceAreaState {
     fn new(content: Pres) -> LSpaceAreaState {
-        return LSpaceAreaState{width: 100, height: 100, content: content,
+        return LSpaceAreaState{width: 100, height: 100,
+            input_system: InputSystem::new(),
+            content: content,
             elem_ctx: RefCell::new(ElementContext::new()),
             elem: None,
             initialised: false,
@@ -94,27 +101,46 @@ impl LSpaceAreaState {
     }
 
     fn on_button_press(&mut self, event_button: &EventButton) {
+        self.input_system.mod_state_mut().update_from_gdk_mod(event_button.state);
+        let pos = Point2::new(event_button.x, event_button.y);
+        self.input_system.mouse_mut().set_position(PointerPosition::at_position(pos));
     }
 
     fn on_button_release(&mut self, event_button: &EventButton) {
-    }
-
-    fn on_key_press(&mut self, event_key: &EventKey) {
-    }
-
-    fn on_key_release(&mut self, event_key: &EventKey) {
+        self.input_system.mod_state_mut().update_from_gdk_mod(event_button.state);
+        let pos = Point2::new(event_button.x, event_button.y);
+        self.input_system.mouse_mut().set_position(PointerPosition::at_position(pos));
     }
 
     fn on_enter(&mut self, event_crossing: &EventCrossing) {
+        self.input_system.mod_state_mut().update_from_gdk_mod(event_crossing.state);
+        let pos = Point2::new(event_crossing.x, event_crossing.y);
+        self.input_system.mouse_mut().set_position(PointerPosition::at_position(pos));
     }
 
     fn on_leave(&mut self, event_crossing: &EventCrossing) {
+        self.input_system.mod_state_mut().update_from_gdk_mod(event_crossing.state);
+        self.input_system.mouse_mut().set_position(PointerPosition::out_of_bounds());
     }
 
     fn on_motion(&mut self, event_motion: &EventMotion) {
+        self.input_system.mod_state_mut().update_from_gdk_mod(event_motion.state);
+        let pos = Point2::new(event_motion.x, event_motion.y);
+        self.input_system.mouse_mut().set_position(PointerPosition::at_position(pos));
     }
 
     fn on_scroll(&mut self, event_scroll: &EventScroll) {
+        self.input_system.mod_state_mut().update_from_gdk_mod(event_scroll.state);
+        let pos = Point2::new(event_scroll.x, event_scroll.y);
+        self.input_system.mouse_mut().set_position(PointerPosition::at_position(pos));
+    }
+
+    fn on_key_press(&mut self, event_key: &EventKey) {
+        self.input_system.mod_state_mut().update_from_gdk_mod(event_key.state);
+    }
+
+    fn on_key_release(&mut self, event_key: &EventKey) {
+        self.input_system.mod_state_mut().update_from_gdk_mod(event_key.state);
     }
 
     fn on_draw(&mut self, cairo_ctx: Context) {
@@ -210,22 +236,6 @@ impl LSpaceArea {
 
         {
             let state_clone = wrapped_state.clone();
-            wrapped_instance.borrow().drawing_area.connect_key_press_event(move |widget, event_key| {
-                state_clone.borrow_mut().on_key_press(event_key);
-                return Inhibit(true);
-            });
-        }
-
-        {
-            let state_clone = wrapped_state.clone();
-            wrapped_instance.borrow().drawing_area.connect_key_release_event(move |widget, event_key| {
-                state_clone.borrow_mut().on_key_release(event_key);
-                return Inhibit(true);
-            });
-        }
-
-        {
-            let state_clone = wrapped_state.clone();
             wrapped_instance.borrow().drawing_area.connect_enter_notify_event(move |widget, event_crossing| {
                 state_clone.borrow_mut().on_enter(event_crossing);
                 return Inhibit(true);
@@ -252,6 +262,22 @@ impl LSpaceArea {
             let state_clone = wrapped_state.clone();
             wrapped_instance.borrow().drawing_area.connect_scroll_event(move |widget, event_scroll| {
                 state_clone.borrow_mut().on_scroll(event_scroll);
+                return Inhibit(true);
+            });
+        }
+
+        {
+            let state_clone = wrapped_state.clone();
+            wrapped_instance.borrow().drawing_area.connect_key_press_event(move |widget, event_key| {
+                state_clone.borrow_mut().on_key_press(event_key);
+                return Inhibit(true);
+            });
+        }
+
+        {
+            let state_clone = wrapped_state.clone();
+            wrapped_instance.borrow().drawing_area.connect_key_release_event(move |widget, event_key| {
+                state_clone.borrow_mut().on_key_release(event_key);
                 return Inhibit(true);
             });
         }
