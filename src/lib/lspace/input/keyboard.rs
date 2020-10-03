@@ -3,6 +3,8 @@ use std::rc::Rc;
 
 use input::inputmodifier::InputModifierState;
 
+use gdk::keys::Key;
+
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum KeyEventType {
@@ -13,18 +15,18 @@ pub enum KeyEventType {
 #[derive(Debug)]
 pub struct KeyEvent {
     mod_state: InputModifierState,
-    key_val: u32,
-    key_string: String,
+    key_val: Key,
+    key_string: Option<String>,
     event_type: KeyEventType
 }
 
 impl KeyEvent {
-    pub fn new_press(mod_state: InputModifierState, key_val: u32, key_string: String) -> KeyEvent {
+    pub fn new_press(mod_state: InputModifierState, key_val: Key, key_string: Option<String>) -> KeyEvent {
         KeyEvent{mod_state: mod_state, key_val: key_val, key_string: key_string,
             event_type: KeyEventType::Press}
     }
 
-    pub fn new_release(mod_state: InputModifierState, key_val: u32, key_string: String) -> KeyEvent {
+    pub fn new_release(mod_state: InputModifierState, key_val: Key, key_string: Option<String>) -> KeyEvent {
         KeyEvent{mod_state: mod_state, key_val: key_val, key_string: key_string,
             event_type: KeyEventType::Release}
     }
@@ -33,11 +35,11 @@ impl KeyEvent {
         self.mod_state
     }
 
-    pub fn key_val(&self) -> u32 {
-        self.key_val
+    pub fn key_val(&self) -> Key {
+        self.key_val.clone()
     }
 
-    pub fn key_string(&self) -> &String {
+    pub fn key_string(&self) -> &Option<String> {
         &self.key_string
     }
 
@@ -67,14 +69,14 @@ impl KeyboardMut {
         KeyboardMut{interactors: Vec::new()}
     }
 
-    fn on_key_press(&self, mod_state: InputModifierState, key_val: u32, key_string: String) {
+    fn on_key_press(&self, mod_state: InputModifierState, key_val: Key, key_string: Option<String>) {
         let event = KeyEvent::new_press(mod_state, key_val, key_string);
         for ref interactor in self.interactors.iter() {
             interactor.on_key_event(&event);
         }
     }
 
-    fn on_key_release(&self, mod_state: InputModifierState, key_val: u32, key_string: String) {
+    fn on_key_release(&self, mod_state: InputModifierState, key_val: Key, key_string: Option<String>) {
         let event = KeyEvent::new_release(mod_state, key_val, key_string);
         for ref interactor in self.interactors.iter() {
             interactor.on_key_event(&event);
@@ -112,11 +114,11 @@ impl Keyboard {
         };
     }
 
-    pub fn on_key_press(&self, mod_state: InputModifierState, key_val: u32, key_string: String) {
+    pub fn on_key_press(&self, mod_state: InputModifierState, key_val: Key, key_string: Option<String>) {
         self.m.borrow().on_key_press(mod_state, key_val, key_string);
     }
 
-    pub fn on_key_release(&self, mod_state: InputModifierState, key_val: u32, key_string: String) {
+    pub fn on_key_release(&self, mod_state: InputModifierState, key_val: Key, key_string: Option<String>) {
         self.m.borrow().on_key_release(mod_state, key_val, key_string);
     }
 

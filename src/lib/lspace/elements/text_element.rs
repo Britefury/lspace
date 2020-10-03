@@ -4,7 +4,7 @@ use std::string::String;
 use std::mem::transmute;
 
 use cairo::Context;
-use cairo_sys::enums::{FontSlant, FontWeight};
+use cairo::{FontSlant, FontWeight};
 
 use layout::lreq::LReq;
 use layout::lalloc::LAlloc;

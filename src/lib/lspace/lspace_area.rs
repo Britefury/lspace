@@ -7,6 +7,8 @@ use std::cell::{Ref, RefCell};
 
 use cairo::Context;
 
+use gdk::keys::Key;
+
 use geom::vector2::Vector2;
 use geom::point2::Point2;
 use geom::bbox2::BBox2;
@@ -103,11 +105,11 @@ impl LSpaceAreaMut {
         self.input_pointer.set_position(PointerPosition::at_position(pos));
     }
 
-    pub fn on_key_press(&mut self, mod_state: InputModifierState, key_val: u32, key_string: String) {
+    pub fn on_key_press(&mut self, mod_state: InputModifierState, key_val: Key, key_string: Option<String>) {
         self.input_mods = mod_state;
     }
 
-    pub fn on_key_release(&mut self, mod_state: InputModifierState, key_val: u32, key_string: String) {
+    pub fn on_key_release(&mut self, mod_state: InputModifierState, key_val: Key, key_string: Option<String>) {
         self.input_mods = mod_state;
     }
 
@@ -212,13 +214,13 @@ impl LSpaceArea {
         self.m.borrow_mut().on_scroll(mod_state, pos, scroll_x, scroll_y);
     }
 
-    pub fn on_key_press(&self, mod_state: InputModifierState, key_val: u32, key_string: String) {
-        self.m.borrow_mut().on_key_press(mod_state, key_val, key_string.clone());
+    pub fn on_key_press(&self, mod_state: InputModifierState, key_val: Key, key_string: Option<String>) {
+        self.m.borrow_mut().on_key_press(mod_state, key_val.clone(), key_string.clone());
         self.input_keyboard.on_key_press(mod_state, key_val, key_string);
     }
 
-    pub fn on_key_release(&self, mod_state: InputModifierState, key_val: u32, key_string: String) {
-        self.m.borrow_mut().on_key_release(mod_state, key_val, key_string.clone());
+    pub fn on_key_release(&self, mod_state: InputModifierState, key_val: Key, key_string: Option<String>) {
+        self.m.borrow_mut().on_key_release(mod_state, key_val.clone(), key_string.clone());
         self.input_keyboard.on_key_release(mod_state, key_val, key_string);
     }
 

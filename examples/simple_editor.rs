@@ -10,9 +10,10 @@ use std::string::String;
 use std::rc::Rc;
 
 use gtk::traits::*;
-use gtk::signal::Inhibit;
+use gtk::prelude::Inhibit;
 
-use gdk::enums::key;
+use gdk::keys::constants as keys;
+use gdk::keys::Key;
 
 use lspace::geom::colour::Colour;
 use lspace::elements::element::{ElementRef, elem_as_ref};
@@ -38,23 +39,29 @@ impl TKeyboardInteractor for LineEditor {
         if event.event_type() == KeyEventType::Press {
             let mut text = self.text_elem.as_text_element().unwrap().get_text().clone();
             println!("Key val = {}", event.key_val());
-            match event.key_val() as i32 {
-                key::BackSpace => {
+            match event.key_val() as Key {
+                keys::BackSpace => {
                     println!("Deleting");
                     let n = text.len();
                     let new_text = String::from(&text[0..n-1]);
                     self.text_elem.as_text_element().unwrap().set_text(new_text);
                 },
-                key::Shift_L | key::Shift_R | key::Control_L | key::Control_R |
-                key::Meta_L | key::Meta_R | key::Alt_L | key::Alt_R |
-                key::Super_L | key::Super_R | key::Hyper_L | key::Hyper_R |
-                key::Caps_Lock | key::Shift_Lock => {
+                keys::Shift_L | keys::Shift_R | keys::Control_L | keys::Control_R |
+                keys::Meta_L | keys::Meta_R | keys::Alt_L | keys::Alt_R |
+                keys::Super_L | keys::Super_R | keys::Hyper_L | keys::Hyper_R |
+                keys::Caps_Lock | keys::Shift_Lock => {
                     // Ignore
                 },
                 _ => {
-                    println!("Inserting {:?}", event.key_string());
-                    let new_text = text + event.key_string();
-                    self.text_elem.as_text_element().unwrap().set_text(new_text);
+                    match event.key_string() {
+                        None => {
+                        },
+                        Some(key_string) => {
+                            println!("Inserting {:?}", key_string);
+                            let new_text = text + key_string;
+                            self.text_elem.as_text_element().unwrap().set_text(new_text);
+                        }
+                    }
                 }
             }
         }
@@ -104,7 +111,7 @@ fn main() {
     widget.grab_focus();
 
     // Create a GTK window in which to place it
-    let window = gtk::Window::new(gtk::WindowType::Toplevel).unwrap();
+    let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("Very Simple Editor");
     window.add(&*widget);
     window.set_default_size(800, 500);

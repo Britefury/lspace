@@ -7,11 +7,11 @@ use std::cell::RefCell;
 use std::ffi::CStr;
 use libc::c_char;
 
-use gdk::ffi as gdk_ffi;
-use gdk::enums::modifier_type;
+// use gdk::ffi as gdk_ffi;
+use gdk::ModifierType;
 use gtk;
 use gtk::traits::*;
-use gtk::signal::Inhibit;
+use gtk::prelude::Inhibit;
 
 use input::inputmodifier::{self, InputModifierState};
 
@@ -21,25 +21,25 @@ use pres::pres::Pres;
 use lspace_area::{LSpaceArea, TLSpaceListener};
 
 
-fn gdk_modifier_to_input_mod_state(gdk_state: gdk_ffi::GdkModifierType) -> InputModifierState {
+fn gdk_modifier_to_input_mod_state(gdk_state: ModifierType) -> InputModifierState {
     let mut value = 0;
-    value = value | if gdk_state.contains(modifier_type::Button1Mask) {inputmodifier::BUTTON1}
+    value = value | if gdk_state.contains(ModifierType::BUTTON1_MASK) {inputmodifier::BUTTON1}
                     else {0};
-    value = value | if gdk_state.contains(modifier_type::Button2Mask) {inputmodifier::BUTTON2}
+    value = value | if gdk_state.contains(ModifierType::BUTTON2_MASK) {inputmodifier::BUTTON2}
                     else {0};
-    value = value | if gdk_state.contains(modifier_type::Button3Mask) {inputmodifier::BUTTON3}
+    value = value | if gdk_state.contains(ModifierType::BUTTON3_MASK) {inputmodifier::BUTTON3}
                     else {0};
-    value = value | if gdk_state.contains(modifier_type::Button4Mask) {inputmodifier::BUTTON4}
+    value = value | if gdk_state.contains(ModifierType::BUTTON4_MASK) {inputmodifier::BUTTON4}
                     else {0};
-    value = value | if gdk_state.contains(modifier_type::Button5Mask) {inputmodifier::BUTTON5}
+    value = value | if gdk_state.contains(ModifierType::BUTTON5_MASK) {inputmodifier::BUTTON5}
                     else {0};
-    value = value | if gdk_state.contains(modifier_type::ControlMask) {inputmodifier::KEY_CTRL}
+    value = value | if gdk_state.contains(ModifierType::CONTROL_MASK) {inputmodifier::KEY_CTRL}
                     else {0};
-    value = value | if gdk_state.contains(modifier_type::ShiftMask) {inputmodifier::KEY_SHIFT}
+    value = value | if gdk_state.contains(ModifierType::SHIFT_MASK) {inputmodifier::KEY_SHIFT}
                     else {0};
-    value = value | if gdk_state.contains(modifier_type::Mod1Mask) {inputmodifier::KEY_ALT}
+    value = value | if gdk_state.contains(ModifierType::MOD1_MASK) {inputmodifier::KEY_ALT}
                     else {0};
-    value = value | if gdk_state.contains(modifier_type::SuperMask) {inputmodifier::KEY_SUPER}
+    value = value | if gdk_state.contains(ModifierType::SUPER_MASK) {inputmodifier::KEY_SUPER}
                     else {0};
     InputModifierState::from_values(value)
 }
@@ -52,7 +52,7 @@ struct LSpaceWidgetMut {
 
 impl LSpaceWidgetMut {
     pub fn new_with_area(area: Rc<LSpaceArea>) -> LSpaceWidgetMut {
-        let drawing_area = Rc::new(gtk::DrawingArea::new().unwrap());
+        let drawing_area = Rc::new(gtk::DrawingArea::new());
         drawing_area.set_can_focus(true);
 
         let instance = LSpaceWidgetMut{drawing_area: drawing_area.clone(),
@@ -83,9 +83,10 @@ impl LSpaceWidgetMut {
         {
             let state_clone = area.clone();
             drawing_area.connect_button_press_event(move |widget, event_button| {
-                let mod_state = gdk_modifier_to_input_mod_state(event_button.state);
-                let pos = Point2::new(event_button.x, event_button.y);
-                state_clone.on_button_press(mod_state, pos, event_button.button);
+                let mod_state = gdk_modifier_to_input_mod_state(event_button.get_state());
+                let (pos_x, pos_y) = event_button.get_position();
+                let pos = Point2::new(pos_x, pos_y);
+                state_clone.on_button_press(mod_state, pos, event_button.get_button());
                 Inhibit(true)
             });
         }
@@ -93,9 +94,10 @@ impl LSpaceWidgetMut {
         {
             let state_clone = area.clone();
             drawing_area.connect_button_release_event(move |widget, event_button| {
-                let mod_state = gdk_modifier_to_input_mod_state(event_button.state);
-                let pos = Point2::new(event_button.x, event_button.y);
-                state_clone.on_button_release(mod_state, pos, event_button.button);
+                let mod_state = gdk_modifier_to_input_mod_state(event_button.get_state());
+                let (pos_x, pos_y) = event_button.get_position();
+                let pos = Point2::new(pos_x, pos_y);
+                state_clone.on_button_release(mod_state, pos, event_button.get_button());
                 Inhibit(true)
             });
         }
@@ -103,8 +105,9 @@ impl LSpaceWidgetMut {
         {
             let state_clone = area.clone();
             drawing_area.connect_enter_notify_event(move |widget, event_crossing| {
-                let mod_state = gdk_modifier_to_input_mod_state(event_crossing.state);
-                let pos = Point2::new(event_crossing.x, event_crossing.y);
+                let mod_state = gdk_modifier_to_input_mod_state(event_crossing.get_state());
+                let (pos_x, pos_y) = event_crossing.get_position();
+                let pos = Point2::new(pos_x, pos_y);
                 state_clone.on_enter(mod_state, pos);
                 Inhibit(true)
             });
@@ -113,8 +116,9 @@ impl LSpaceWidgetMut {
         {
             let state_clone = area.clone();
             drawing_area.connect_leave_notify_event(move |widget, event_crossing| {
-                let mod_state = gdk_modifier_to_input_mod_state(event_crossing.state);
-                let pos = Point2::new(event_crossing.x, event_crossing.y);
+                let mod_state = gdk_modifier_to_input_mod_state(event_crossing.get_state());
+                let (pos_x, pos_y) = event_crossing.get_position();
+                let pos = Point2::new(pos_x, pos_y);
                 state_clone.on_leave(mod_state, pos);
                 Inhibit(true)
             });
@@ -123,8 +127,9 @@ impl LSpaceWidgetMut {
         {
             let state_clone = area.clone();
             drawing_area.connect_motion_notify_event(move |widget, event_motion| {
-                let mod_state = gdk_modifier_to_input_mod_state(event_motion.state);
-                let pos = Point2::new(event_motion.x, event_motion.y);
+                let mod_state = gdk_modifier_to_input_mod_state(event_motion.get_state());
+                let (pos_x, pos_y) = event_motion.get_position();
+                let pos = Point2::new(pos_x, pos_y);
                 state_clone.on_motion(mod_state, pos);
                 Inhibit(true)
             });
@@ -133,9 +138,11 @@ impl LSpaceWidgetMut {
         {
             let state_clone = area.clone();
             drawing_area.connect_scroll_event(move |widget, event_scroll| {
-                let mod_state = gdk_modifier_to_input_mod_state(event_scroll.state);
-                let pos = Point2::new(event_scroll.x, event_scroll.y);
-                state_clone.on_scroll(mod_state, pos, event_scroll.delta_x, event_scroll.delta_y);
+                let mod_state = gdk_modifier_to_input_mod_state(event_scroll.get_state());
+                let (pos_x, pos_y) = event_scroll.get_position();
+                let pos = Point2::new(pos_x, pos_y);
+                let (dx, dy) = event_scroll.get_delta();
+                state_clone.on_scroll(mod_state, pos, dx, dy);
                 Inhibit(true)
             });
         }
@@ -143,10 +150,9 @@ impl LSpaceWidgetMut {
         {
             let state_clone = area.clone();
             drawing_area.connect_key_press_event(move |widget, event_key| {
-                let mod_state = gdk_modifier_to_input_mod_state(event_key.state);
-                let c_key_str = event_key.string as *const c_char;
-                let k_str = unsafe{CStr::from_ptr(c_key_str)}.to_str().unwrap().to_string();
-                state_clone.on_key_press(mod_state, event_key.keyval, k_str);
+                let mod_state = gdk_modifier_to_input_mod_state(event_key.get_state());
+                let k_str = event_key.get_keyval().to_unicode().map(|s| s.to_string());
+                state_clone.on_key_press(mod_state, event_key.get_keyval(), k_str);
                 Inhibit(true)
             });
         }
@@ -154,10 +160,9 @@ impl LSpaceWidgetMut {
         {
             let state_clone = area.clone();
             drawing_area.connect_key_release_event(move |widget, event_key| {
-                let mod_state = gdk_modifier_to_input_mod_state(event_key.state);
-                let c_key_str = event_key.string as *const c_char;
-                let k_str = unsafe{CStr::from_ptr(c_key_str)}.to_str().unwrap().to_string();
-                state_clone.on_key_release(mod_state, event_key.keyval, k_str);
+                let mod_state = gdk_modifier_to_input_mod_state(event_key.get_state());
+                let k_str = event_key.get_keyval().to_unicode().map(|s| s.to_string());
+                state_clone.on_key_release(mod_state, event_key.get_keyval(), k_str);
                 Inhibit(true)
             });
         }
