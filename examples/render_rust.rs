@@ -1,6 +1,4 @@
 #![cfg_attr(not(feature = "gtk_3_10"), allow(unused_variables, unused_mut))]
-#![feature(path_ext)]
-#![feature(convert)]
 
 extern crate time;
 extern crate gtk;
@@ -17,7 +15,7 @@ use std::rc::Rc;
 use regex::Regex;
 
 use gtk::traits::*;
-use gtk::signal::Inhibit;
+use gtk::prelude::Inhibit;
 
 use lspace::geom::colour::Colour;
 use lspace::elements::text_element::{TextStyleParams};
@@ -50,7 +48,9 @@ impl TokenDefinition {
     pub fn first(&self, text: &str) -> Option<(usize, usize)> {
         match self.re.find(text) {
             None => None,
-            Some((start, end)) => {
+            Some(mat) => {
+                let start = mat.start();
+                let end = mat.end();
                 match self.valid_strings {
                     None => Some((start, end)),
                     Some(ref valids) if valids.contains(&String::from(&text[start..end])) =>
@@ -186,7 +186,7 @@ fn main() {
     let widget = lspace.gtk_widget();
 
     // Create a GTK window in which to place it
-    let window = gtk::Window::new(gtk::WindowType::Toplevel).unwrap();
+    let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("Render Rust code");
     window.add(&*widget);
     window.set_default_size(800, 500);

@@ -1,6 +1,6 @@
 #![cfg_attr(not(feature = "gtk_3_10"), allow(unused_variables, unused_mut))]
-#![feature(path_ext)]
-#![feature(convert)]
+// #![feature(path_ext)]
+// #![feature(convert)]
 
 extern crate time;
 extern crate gtk;
@@ -16,7 +16,7 @@ use std::rc::Rc;
 use std::process::Command;
 
 use gtk::traits::*;
-use gtk::signal::Inhibit;
+use gtk::prelude::Inhibit;
 
 use lspace::elements::text_element::{TextStyleParams};
 use lspace::pres::pres::Pres;
@@ -36,8 +36,17 @@ fn main() {
     if !Path::new(FORMATTED_FILENAME).exists() {
         println!("Using Python to download War and Peace text...");
 
-        let version_out = Command::new("python").args(&["--version"]).output().unwrap();
-        let output = String::from_utf8_lossy(&version_out.stderr);
+        let cmd_name = match Command::new("python").args(&["--version"]).output() {
+            Ok(_) => Option::Some("python"),
+            Err(_) => match Command::new("python3").args(&["--version"]).output() {
+                Ok(_) => Option::Some("python3"),
+                Err(_) => Option::None
+            }
+        };
+        let version_out = Command::new(cmd_name.unwrap()).args(&["--version"]).output().unwrap();
+
+        let output = String::from_utf8_lossy(&version_out.stdout);
+        println!("Output: {}", output);
 
         let import_code = if output.starts_with("Python 2.") {
             "from urllib import urlretrieve"
@@ -47,7 +56,7 @@ fn main() {
             panic!();
         };
 
-        Command::new("python").args(&["-c",
+        Command::new(cmd_name.unwrap()).args(&["-c",
             &format!("{}; urlretrieve('{}', '{}')",
                 import_code, DOWNLOAD_URL, FORMATTED_FILENAME)]).status().unwrap();
     }
@@ -103,7 +112,7 @@ fn main() {
     let widget = lspace.gtk_widget();
 
     // Create a GTK window in which to place it
-    let window = gtk::Window::new(gtk::WindowType::Toplevel).unwrap();
+    let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("War and Peace");
     window.add(&*widget);
     window.set_default_size(800, 500);

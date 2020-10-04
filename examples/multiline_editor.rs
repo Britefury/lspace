@@ -13,10 +13,11 @@ use std::cell::{RefCell};
 use std::cmp::min;
 
 use gtk::traits::*;
-use gtk::signal::Inhibit;
+use gtk::prelude::Inhibit;
 
 // for a list of key names see: http://gtk-rs.org/docs/gdk/enums/key/index.html
-use gdk::enums::key;
+use gdk::keys::constants as keys;
+use gdk::keys::Key;
 
 use lspace::geom::colour::Colour;
 use lspace::elements::element::{ElementRef, elem_as_ref};
@@ -128,8 +129,8 @@ impl MultiLineEditor {
 impl TKeyboardInteractor for MultiLineEditor {
     fn on_key_event(&self, event: &KeyEvent) {
         if event.event_type() == KeyEventType::Press {
-            match event.key_val() as i32 {
-                key::BackSpace => {
+            match event.key_val() as Key {
+                keys::BackSpace => {
                     let mut mm = self.m.borrow_mut();
                     let pos = mm.column;
                     let mut text = mm.text_elements[mm.current_line].as_text_element().unwrap().get_text().clone();
@@ -143,34 +144,34 @@ impl TKeyboardInteractor for MultiLineEditor {
                     }
                 },
 
-                key::Left => {
+                keys::Left => {
                     self.cursor_left();
                 },
-                key::Right => {
+                keys::Right => {
                     self.cursor_right();
                 },
-                key::Up => {
+                keys::Up => {
                     self.cursor_up();
                 },
-                key::Down => {
+                keys::Down => {
                     self.cursor_down();
                 },
 
-                key::Return => {
+                keys::Return => {
                     self.new_line();
                 },
 
                 // we can ignore shift
-                key::Shift_L => {},
-                key::Shift_R => {},
+                keys::Shift_L => {},
+                keys::Shift_R => {},
 
                 _ => {
                     let mut mm = self.m.borrow_mut();
                     let mut text = mm.text_elements[mm.current_line].as_text_element().unwrap().get_text().clone();
                     let n = text.len();
 
-                    println!("Inserting {:?}", event.key_string());
-                    let new_text = text[0..mm.column].to_string() + event.key_string() + &text[mm.column..n];
+                    println!("Inserting {:?}", event.key_string().as_ref().unwrap());
+                    let new_text = text[0..mm.column].to_string() + event.key_string().as_ref().unwrap().as_str() + &text[mm.column..n];
                     mm.column += 1;
                     mm.text_elements[mm.current_line].as_text_element().unwrap().set_text(new_text);
                 }
@@ -201,7 +202,7 @@ fn main() {
     widget.grab_focus();
 
     // Create a GTK window in which to place it
-    let window = gtk::Window::new(gtk::WindowType::Toplevel).unwrap();
+    let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("Very Simple Editor");
     window.add(&*widget);
     window.set_default_size(800, 500);
